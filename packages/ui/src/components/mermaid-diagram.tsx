@@ -1,54 +1,52 @@
 import { useEffect, useRef, useState } from 'react';
 import mermaid from 'mermaid';
 import { XIcon } from './icons/x-icon';
+import { useDocumentTheme } from '../hooks/use-theme';
 
-let initialized = false;
+let initializedTheme: 'light' | 'dark' | null = null;
 
-function initMermaid(isDark: boolean) {
+function initMermaid(theme: 'light' | 'dark') {
+  if (initializedTheme === theme) {
+    return;
+  }
   mermaid.initialize({
     startOnLoad: false,
-    theme: isDark ? 'dark' : 'default',
+    theme: theme === 'dark' ? 'dark' : 'default',
     fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
     fontSize: 12,
     flowchart: { padding: 8 },
     securityLevel: 'strict',
+    suppressErrorRendering: true,
   });
-  initialized = true;
+  initializedTheme = theme;
 }
 
 let idCounter = 0;
 
 export function MermaidDiagram(props: { chart: string }) {
-  const containerRef = useRef<HTMLDivElement>(null);
   const dialogRef = useRef<HTMLDialogElement>(null);
   const [error, setError] = useState<string | null>(null);
   const [svgContent, setSvgContent] = useState<string | null>(null);
-  const idRef = useRef(`mermaid-${idCounter++}`);
+  const theme = useDocumentTheme();
 
   useEffect(() => {
-    const container = containerRef.current;
-    if (!container) {
-      return;
-    }
-
-    const isDark = document.documentElement.classList.contains('dark');
-    if (!initialized) {
-      initMermaid(isDark);
-    }
+    initMermaid(theme);
 
     let cancelled = false;
+    const id = `mermaid-${idCounter++}`;
 
     mermaid
-      .render(idRef.current, props.chart)
+      .render(id, props.chart)
       .then(({ svg }) => {
         if (cancelled) {
           return;
         }
-        container.innerHTML = svg;
         setSvgContent(svg);
         setError(null);
       })
       .catch(() => {
+        // Mermaid renders into a temporary element at the end of the body, which a failed render can leave behind.
+        document.getElementById(`d${id}`)?.remove();
         if (cancelled) {
           return;
         }
@@ -58,7 +56,7 @@ export function MermaidDiagram(props: { chart: string }) {
     return () => {
       cancelled = true;
     };
-  }, [props.chart]);
+  }, [props.chart, theme]);
 
   if (error) {
     return (
@@ -72,8 +70,8 @@ export function MermaidDiagram(props: { chart: string }) {
     <>
       <div className="my-3 relative group">
         <div
-          ref={containerRef}
           className="flex justify-center overflow-hidden [&_svg]:max-w-full max-h-[200px]"
+          dangerouslySetInnerHTML={svgContent ? { __html: svgContent } : undefined}
         />
         {svgContent && (
           <button

@@ -1,5 +1,9 @@
 import { useState, useEffect, useCallback } from 'react';
-import { createHighlighter, type Highlighter, type BundledLanguage } from 'shiki';
+import { createHighlighter, type Highlighter, type BundledLanguage, type GrammarState } from 'shiki';
+import type { SyntaxToken } from '../lib/syntax-token';
+
+/** Lines longer than this stay plain. Tokenizing minified code is slow and unreadable anyway. */
+const TOKENIZE_MAX_LINE_LENGTH = 1000;
 
 const LANG_MAP: Record<string, BundledLanguage> = {
   ts: 'typescript',
@@ -116,7 +120,7 @@ const FILENAME_MAP: Record<string, BundledLanguage> = {
   vagrantfile: 'ruby',
 };
 
-function getLang(filePath: string): BundledLanguage | null {
+export function getLang(filePath: string): BundledLanguage | null {
   const ext = filePath.split('.').pop()?.toLowerCase() || '';
   const fileName = filePath.split('/').pop()?.toLowerCase() || '';
 
@@ -136,12 +140,16 @@ const ALL_LANGS: BundledLanguage[] = [
 ];
 
 let highlighterPromise: Promise<Highlighter> | null = null;
+let loadedHighlighter: Highlighter | null = null;
 
 function getHighlighter(): Promise<Highlighter> {
   if (!highlighterPromise) {
     highlighterPromise = createHighlighter({
       themes: ['github-light', 'github-dark'],
       langs: ALL_LANGS,
+    }).then((instance) => {
+      loadedHighlighter = instance;
+      return instance;
     });
   }
   return highlighterPromise;
@@ -151,10 +159,21 @@ export interface HighlightedTokens {
   tokens: { text: string; color?: string }[];
 }
 
+/** Tokens of a run of lines, plus the grammar state to carry into the next run of the same file. */
+export interface HighlightChunk {
+  lines: SyntaxToken[][];
+  state: GrammarState | undefined;
+}
+
+export type CodeHighlighter = (code: string, state?: GrammarState) => HighlightChunk | null;
+
 export function useHighlighter() {
-  const [highlighter, setHighlighter] = useState<Highlighter | null>(null);
+  const [highlighter, setHighlighter] = useState<Highlighter | null>(() => loadedHighlighter);
 
   useEffect(() => {
+    if (loadedHighlighter) {
+      return;
+    }
     getHighlighter().then(setHighlighter);
   }, []);
 
@@ -187,5 +206,29 @@ export function useHighlighter() {
     }
   }, [highlighter]);
 
-  return { highlight, ready: highlighter !== null };
+  const tokenize = useCallback((code: string, filePath: string, theme: 'light' | 'dark', state?: GrammarState): HighlightChunk | null => {
+    if (!highlighter) {
+      return null;
+    }
+    const lang = getLang(filePath);
+    if (!lang) {
+      return null;
+    }
+    try {
+      const result = highlighter.codeToTokens(code, {
+        lang,
+        theme: theme === 'dark' ? 'github-dark' : 'github-light',
+        grammarState: state,
+        tokenizeMaxLineLength: TOKENIZE_MAX_LINE_LENGTH,
+      });
+      return {
+        lines: result.tokens.map((line) => line.map((token) => ({ text: token.content, color: token.color }))),
+        state: result.grammarState,
+      };
+    } catch {
+      return null;
+    }
+  }, [highlighter]);
+
+  return { highlight, tokenize, ready: highlighter !== null };
 }

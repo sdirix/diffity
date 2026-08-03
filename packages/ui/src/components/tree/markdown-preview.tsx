@@ -4,7 +4,7 @@ import remarkGfm from 'remark-gfm';
 import rehypeRaw from 'rehype-raw';
 import type { Components } from 'react-markdown';
 import { useHighlighter } from '../../hooks/use-highlighter';
-import { getTheme } from '../../hooks/use-theme';
+import { useDocumentTheme } from '../../hooks/use-theme';
 import { MermaidDiagram } from '../mermaid-diagram';
 
 interface MarkdownPreviewProps {
@@ -95,6 +95,7 @@ function FrontmatterTable(props: { entries: [string, string][] }) {
 export function MarkdownPreview(props: MarkdownPreviewProps) {
   const { content, filePath } = props;
   const { highlight, ready } = useHighlighter();
+  const theme = useDocumentTheme();
   const raw = content.join('\n');
 
   const { entries: frontmatterEntries, body: markdown } = useMemo(() => parseFrontmatter(raw), [raw]);
@@ -122,7 +123,7 @@ export function MarkdownPreview(props: MarkdownPreviewProps) {
 
       let highlighted: { text: string; color?: string }[][] | null = null;
       if (ready && lang) {
-        const result = highlight(codeString, `file.${lang}`, getTheme());
+        const result = highlight(codeString, `file.${lang}`, theme);
         if (result) {
           highlighted = result.map((line) => line.tokens);
         }
@@ -155,7 +156,7 @@ export function MarkdownPreview(props: MarkdownPreviewProps) {
     img({ src, alt, width, height }) {
       return <img src={resolveSrc(src)} alt={alt || ''} width={width} height={height} />;
     },
-  }), [highlight, ready, resolveSrc]);
+  }), [highlight, ready, resolveSrc, theme]);
 
   return (
     <div className="border border-border rounded-lg overflow-hidden">

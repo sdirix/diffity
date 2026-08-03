@@ -1,15 +1,16 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { DiffHunk } from '@diffity/parser';
 import type { DiffFile, DiffLine as DiffLineType } from '@diffity/parser';
 import type { SyntaxToken } from '../../lib/syntax-token';
-import type { HighlightedTokens } from '../../hooks/use-highlighter';
+import type { CodeHighlighter } from '../../hooks/use-highlighter';
 import type { CommentSide, LineSelection } from '../comments/types';
 import { type ViewMode, getFilePath, buildChangeGroupPatch, extractLinesFromDiff, extractLinesFromExpandedLines } from '../../lib/diff-utils';
 import { revertHunk as apiRevertHunk } from '../../lib/api';
 import { ConfirmDialog } from '../ui/confirm-dialog';
 import { computeGaps, createContextLines, getExpandRange, type ExpandableGap } from '../../lib/context-expansion';
-import { fileContentOptions } from '../../queries/file';
+import { fileContentOptions, headFileContentOptions } from '../../queries/file';
+import { buildSyntaxMap, planSyntaxSources, sidesShown, tokenizeSources, type SideTokens } from '../../lib/syntax-lines';
 import type { CommentActions } from '../../hooks/use-comment-actions';
 import type { CommentThread } from '../comments/types';
 import { GENERAL_THREAD_FILE_PATH, DEFAULT_AUTHOR } from '../comments/types';
@@ -27,9 +28,14 @@ import { OrphanedThreads } from '../comments/orphaned-threads';
 import { ThreadBadge } from '../ui/thread-badge';
 import { buildExpansionSyntaxMap, renderExpansionRows } from './render-expansion-rows';
 import { ExpandRow } from './expand-row';
+import { EyeIcon } from '../icons/eye-icon';
+import { isMarkdownFile } from '../../lib/file-types';
 
 export const LARGE_DIFF_LINE_THRESHOLD = 200;
-
+/** Longer files are highlighted from their hunks only. */
+const HIGHLIGHT_MAX_FILE_LINES = 10000;
+/** Main thread budget per highlighting step. The rest waits for the next task so scrolling stays smooth. */
+const HIGHLIGHT_BUDGET_MS = 8;
 
 function getTotalLineCount(file: DiffFile): number {
   let count = 0;
@@ -46,8 +52,9 @@ interface FileBlockProps {
   onToggleCollapse: (path: string) => void;
   reviewed: boolean;
   onReviewedChange: (path: string, reviewed: boolean) => void;
-  highlightLine?: (code: string) => HighlightedTokens[] | null;
+  highlightCode?: CodeHighlighter;
   baseRef?: string;
+  theme?: 'light' | 'dark';
   canRevert?: boolean;
   onRevert?: () => void;
   threads: CommentThread[];
@@ -69,7 +76,7 @@ interface GapExpansion {
 
 export function FileBlock(props: FileBlockProps) {
   const {
-    file, viewMode, collapsed, onToggleCollapse, reviewed, onReviewedChange, highlightLine, baseRef, canRevert, onRevert,
+    file, viewMode, collapsed, onToggleCollapse, reviewed, onReviewedChange, highlightCode, baseRef, theme, canRevert, onRevert,
     threads: allThreads, commentsEnabled, commentActions, onAddThread: rawAddThread, pendingSelection, onPendingSelectionChange,
     highlighted, onHighlightEnd,
   } = props;
@@ -92,6 +99,16 @@ export function FileBlock(props: FileBlockProps) {
   const { copied: pathCopied, copy: copyPath } = useCopy();
 
   const [confirmRevertChange, setConfirmRevertChange] = useState<{ hunk: DiffHunk; startIndex: number; endIndex: number } | null>(null);
+
+  // A deleted file has no new side to render, so there is nothing to preview.
+  const canPreview = isMarkdownFile(filePath) && file.status !== 'deleted';
+  // The theme rides along so the new tab matches when it was set by --dark
+  // rather than by a toggle, which is what seeds localStorage.
+  const previewUrl = `/preview?${new URLSearchParams({
+    path: filePath,
+    ref: baseRef || 'work',
+    ...(theme ? { theme } : {}),
+  })}`;
 
   const handleRevertChange = useCallback(async (info: { hunk: DiffHunk; startIndex: number; endIndex: number }) => {
     setConfirmRevertChange(null);
@@ -212,55 +229,54 @@ export function FileBlock(props: FileBlockProps) {
   }, [isLineInSelection, pendingSelection, filePath, fileThreads]);
 
 
+  const rendersLines = !collapsed && !file.isBinary && file.hunks.length > 0
+    && (!isLargeDiff || largeDiffExpanded || allFileThreads.length > 0);
+  const shownSides = useMemo(() => sidesShown(file.hunks), [file.hunks]);
+  const wholeFile = !!highlightCode && rendersLines && file.status !== 'added' && file.status !== 'deleted';
+  const fetchOld = wholeFile && shownSides.old && (fileLineCount ?? 0) <= HIGHLIGHT_MAX_FILE_LINES;
+  const fetchNew = wholeFile && shownSides.new;
+  const oldContent = useQuery({ ...fileContentOptions(fileContentPath, fetchOld, baseRef), staleTime: Infinity });
+  const newContent = useQuery({ ...headFileContentOptions(filePath, baseRef), enabled: fetchNew, staleTime: Infinity });
+  const contentSettled = (!fetchOld || !oldContent.isPending) && (!fetchNew || !newContent.isPending);
+  const versions = useMemo(
+    () => (contentSettled ? { oldLines: oldContent.data ?? null, newLines: newContent.data ?? null } : null),
+    [contentSettled, oldContent.data, newContent.data],
+  );
+
   const [syntaxMap, setSyntaxMap] = useState<Map<string, SyntaxToken[]> | undefined>(undefined);
 
   useEffect(() => {
-    if (!highlightLine) {
+    if (!highlightCode || !rendersLines) {
       return;
     }
 
-    const allLines: { content: string; type: string; num: number | null }[] = [];
-    for (const hunk of file.hunks) {
-      for (const line of hunk.lines) {
-        const num = line.type === 'delete' ? line.oldLineNumber : line.newLineNumber;
-        allLines.push({ content: line.content, type: line.type, num });
-      }
-    }
-
+    const plan = planSyntaxSources(file.hunks, versions, HIGHLIGHT_MAX_FILE_LINES);
+    const tokens: SideTokens = { old: new Map(), new: new Map() };
+    const work = tokenizeSources(plan.sources, highlightCode, tokens);
     let cancelled = false;
-    const map = new Map<string, SyntaxToken[]>();
-    let index = 0;
-    const CHUNK_SIZE = 50;
+    let timer = 0;
 
-    const processChunk = () => {
+    const step = () => {
       if (cancelled) {
         return;
       }
-
-      const end = Math.min(index + CHUNK_SIZE, allLines.length);
-      for (let i = index; i < end; i++) {
-        const line = allLines[i];
-        const highlighted = highlightLine(line.content);
-        if (highlighted && highlighted.length > 0) {
-          const key = `${line.type}-${line.num}`;
-          map.set(key, highlighted[0].tokens);
+      const deadline = performance.now() + HIGHLIGHT_BUDGET_MS;
+      while (performance.now() < deadline) {
+        if (work.next().done) {
+          setSyntaxMap(buildSyntaxMap(file.hunks, tokens, plan.full));
+          return;
         }
       }
-
-      index = end;
-      if (index < allLines.length) {
-        requestAnimationFrame(processChunk);
-      } else if (!cancelled) {
-        setSyntaxMap(new Map(map));
-      }
+      timer = window.setTimeout(step, 0);
     };
 
-    requestAnimationFrame(processChunk);
+    timer = window.setTimeout(step, 0);
 
     return () => {
       cancelled = true;
+      window.clearTimeout(timer);
     };
-  }, [file, highlightLine]);
+  }, [file, highlightCode, rendersLines, versions]);
 
   const gaps = useMemo(() => {
     if (isNewFile) {
@@ -431,6 +447,18 @@ export function FileBlock(props: FileBlockProps) {
               )}
             </span>
           )}
+          {canPreview && (
+            <a
+              href={previewUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="flex items-center gap-1 text-[11px] text-text-muted hover:text-text transition-colors"
+              title="Preview rendered Markdown in a new tab"
+            >
+              <EyeIcon className="w-3 h-3" />
+              Preview
+            </a>
+          )}
           <div className="flex items-center gap-1.5">
             <DiffStats additions={file.additions} deletions={file.deletions} />
             <div className="flex gap-px">
@@ -515,7 +543,7 @@ export function FileBlock(props: FileBlockProps) {
                     topExpansionLines={i === 0 ? [...(topExpansion?.linesFromTop ?? []), ...(topExpansion?.linesFromBottom ?? [])] : undefined}
                     gapExpansion={betweenExpansion}
                     gapId={betweenGap?.id}
-                    highlightLine={highlightLine}
+                    highlightCode={highlightCode}
                     threads={fileThreads}
                     pendingSelection={filePendingSelection}
                     currentAuthor={DEFAULT_AUTHOR}
@@ -543,7 +571,7 @@ export function FileBlock(props: FileBlockProps) {
                   ...(bottomExpansion?.linesFromTop ?? []),
                   ...(bottomExpansion?.linesFromBottom ?? []),
                 ];
-                const bottomSyntaxMap = buildExpansionSyntaxMap(bottomLines, highlightLine);
+                const bottomSyntaxMap = buildExpansionSyntaxMap(bottomLines, syntaxMap, highlightCode);
                 const bottomCommentProps = {
                   isLineSelected, onLineMouseDown: handleLineMouseDown, onLineMouseEnter: handleLineMouseEnter,
                   onCommentClick: handleCommentClick, threads: fileThreads, pendingSelection: filePendingSelection,

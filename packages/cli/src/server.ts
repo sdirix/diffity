@@ -18,11 +18,13 @@ import {
   getUntrackedDiff,
   getRepoInfo,
   getFileContent,
+  getIndexFileContent,
   getStagedFiles,
   getUnstagedFiles,
   getRecentCommits,
   getFileLineCount,
   resolveBaseRef,
+  resolveHeadRef,
   resolveDiffArgs,
   resolveRef,
   revertFile,
@@ -100,6 +102,18 @@ function serveStatic(res: ServerResponse, filePath: string) {
   const content = readFileSync(filePath);
   res.writeHead(200, { 'Content-Type': mime });
   res.end(content);
+}
+
+/** Reads a file as it exists on the new side of the diff for `ref`. */
+function readHeadSide(filePath: string, ref: string | undefined): string {
+  const head = resolveHeadRef(ref || 'work');
+  if (head.type === 'worktree') {
+    return getWorkingTreeFileContent(filePath);
+  }
+  if (head.type === 'index') {
+    return getIndexFileContent(filePath);
+  }
+  return getFileContent(filePath, head.ref);
 }
 
 function descriptionForRef(ref: string): string {
@@ -349,9 +363,12 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
             pathname.slice('/api/file/'.length),
           );
           const ref = url.searchParams.get('ref') || undefined;
-          const baseRef = ref ? resolveBaseRef(ref) : 'HEAD';
+          const side = url.searchParams.get('side') === 'new' ? 'new' : 'old';
           try {
-            const content = getFileContent(filePath, baseRef);
+            const content =
+              side === 'new'
+                ? readHeadSide(filePath, ref)
+                : getFileContent(filePath, ref ? resolveBaseRef(ref) : 'HEAD');
             sendJson(res, { path: filePath, content: content.split('\n') });
           } catch {
             sendError(res, 404, `File not found: ${filePath}`);

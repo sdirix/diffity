@@ -250,10 +250,12 @@ export function DiffPage() {
 
   const handleRevert = useCallback(() => {
     queryClient.invalidateQueries({ queryKey: ['diff'] });
+    queryClient.invalidateQueries({ queryKey: ['file-content'] });
   }, [queryClient]);
 
   const handleRefreshDiff = useCallback(() => {
     queryClient.invalidateQueries({ queryKey: ['diff'] });
+    queryClient.invalidateQueries({ queryKey: ['file-content'] });
     resetStaleness();
   }, [queryClient, resetStaleness]);
 

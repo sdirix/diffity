@@ -154,8 +154,48 @@ export function resolveBaseRef(ref: string): string {
   return getMergeBase(ref, 'HEAD');
 }
 
+/**
+ * Where the *new* side of a diff comes from, mirroring `resolveDiffArgs`:
+ * - `staged` diffs the index against HEAD, so the new side is the index
+ * - the other working-tree refs and any single ref (`HEAD~3`) diff against the
+ *   working tree, so the new side is the file on disk
+ * - a range (`main..feature`) diffs two commits, so the new side is its right
+ *   end, defaulting to HEAD when omitted (git's own `main..` semantics)
+ */
+export type HeadSource =
+  | { type: 'worktree' }
+  | { type: 'index' }
+  | { type: 'ref'; ref: string };
+
+export function resolveHeadRef(ref: string): HeadSource {
+  if (ref === 'staged') {
+    return { type: 'index' };
+  }
+  if (WORKING_TREE_REFS.has(ref)) {
+    return { type: 'worktree' };
+  }
+
+  const threeDotsIdx = ref.indexOf('...');
+  if (threeDotsIdx !== -1) {
+    const right = ref.slice(threeDotsIdx + 3);
+    return { type: 'ref', ref: right || 'HEAD' };
+  }
+
+  const twoDotsIdx = ref.indexOf('..');
+  if (twoDotsIdx !== -1) {
+    const right = ref.slice(twoDotsIdx + 2);
+    return { type: 'ref', ref: right || 'HEAD' };
+  }
+
+  return { type: 'worktree' };
+}
+
 export function getFileContent(path: string, ref = 'HEAD'): string {
   return exec(`git show ${ref}:${path}`);
+}
+
+export function getIndexFileContent(path: string): string {
+  return exec(`git show ":${path}"`);
 }
 
 export function getFileLineCount(path: string, ref = 'HEAD'): number | null {

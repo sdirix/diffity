@@ -3,7 +3,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { Components } from 'react-markdown';
 import { useHighlighter } from '../../hooks/use-highlighter';
-import { getTheme } from '../../hooks/use-theme';
+import { useDocumentTheme } from '../../hooks/use-theme';
 import { MermaidDiagram } from '../mermaid-diagram';
 
 interface MarkdownContentProps {
@@ -13,6 +13,7 @@ interface MarkdownContentProps {
 export function MarkdownContent(props: MarkdownContentProps) {
   const { content } = props;
   const { highlight, ready } = useHighlighter();
+  const theme = useDocumentTheme();
 
   const components = useMemo<Components>(() => ({
     p({ children }) {
@@ -74,7 +75,7 @@ export function MarkdownContent(props: MarkdownContentProps) {
 
       let highlighted: { text: string; color?: string }[][] | null = null;
       if (ready && lang) {
-        const result = highlight(codeString, `file.${lang}`, getTheme());
+        const result = highlight(codeString, `file.${lang}`, theme);
         if (result) {
           highlighted = result.map((line) => line.tokens);
         }
@@ -137,7 +138,7 @@ export function MarkdownContent(props: MarkdownContentProps) {
         <td className="border border-border px-2 py-1">{children}</td>
       );
     },
-  }), [highlight, ready]);
+  }), [highlight, ready, theme]);
 
   return (
     <div className="markdown-body">

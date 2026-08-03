@@ -201,9 +201,13 @@ export function revertHunk(patch: string): Promise<void> {
   });
 }
 
-export async function fetchFileContent(filePath: string, ref?: string): Promise<string[]> {
+export async function fetchFileContent(
+  filePath: string,
+  ref?: string,
+  side?: 'old' | 'new',
+): Promise<string[]> {
   const json = await apiFetch<{ content: string[] }>(
-    buildUrl(`/api/file/${encodeURIComponent(filePath)}`, { ref }),
+    buildUrl(`/api/file/${encodeURIComponent(filePath)}`, { ref, side }),
   );
   return json.content;
 }

@@ -3,7 +3,7 @@ import { useVirtualizer } from '@tanstack/react-virtual';
 import type { ParsedDiff } from '@diffity/parser';
 import { FileBlock, LARGE_DIFF_LINE_THRESHOLD } from './file-block';
 import { GeneralComments } from '../comments/general-comments';
-import { useHighlighter } from '../../hooks/use-highlighter';
+import { getLang, useHighlighter, type CodeHighlighter } from '../../hooks/use-highlighter';
 import { type ViewMode, getFilePath } from '../../lib/diff-utils';
 import type { CommentThread, LineSelection } from '../comments/types';
 import type { CommentActions } from '../../hooks/use-comment-actions';
@@ -74,17 +74,22 @@ export function DiffView(props: DiffViewProps) {
     threads, commentsEnabled, commentActions, onAddThread,
     pendingSelection, onPendingSelectionChange,
   } = props;
-  const { highlight } = useHighlighter();
+  const { tokenize, ready: highlighterReady } = useHighlighter();
   const scrollElementRef = useRef<HTMLElement>(null);
 
   const highlighters = useMemo(() => {
-    const map = new Map<string, (code: string) => ReturnType<typeof highlight>>();
+    const map = new Map<string, CodeHighlighter>();
+    if (!highlighterReady) {
+      return map;
+    }
     for (const file of diff.files) {
       const filePath = getFilePath(file);
-      map.set(filePath, (code: string) => highlight(code, filePath, theme));
+      if (getLang(filePath)) {
+        map.set(filePath, (code, state) => tokenize(code, filePath, theme, state));
+      }
     }
     return map;
-  }, [diff, highlight, theme]);
+  }, [diff, tokenize, theme, highlighterReady]);
 
   const virtualizer = useVirtualizer({
     count: diff.files.length,
@@ -289,8 +294,9 @@ export function DiffView(props: DiffViewProps) {
                 onToggleCollapse={onToggleCollapse}
                 reviewed={reviewedFiles.has(filePath)}
                 onReviewedChange={onReviewedChange}
-                highlightLine={highlighters.get(filePath)}
+                highlightCode={highlighters.get(filePath)}
                 baseRef={baseRef}
+                theme={theme}
                 canRevert={canRevert}
                 onRevert={onRevert}
                 threads={threads}

@@ -1,5 +1,5 @@
 import type { DiffHunk, DiffLine as DiffLineType } from '@diffity/parser';
-import type { HighlightedTokens } from '../../hooks/use-highlighter';
+import type { CodeHighlighter } from '../../hooks/use-highlighter';
 import type { ViewMode } from '../../lib/diff-utils';
 import type { SyntaxToken } from '../../lib/syntax-token';
 import type { ExpandControls } from './hunk-header';
@@ -23,7 +23,7 @@ interface HunkWithGapProps {
   topExpansionLines?: DiffLineType[];
   gapExpansion?: GapExpansion;
   gapId?: string;
-  highlightLine?: (code: string) => HighlightedTokens[] | null;
+  highlightCode?: CodeHighlighter;
   threads?: CommentThreadType[];
   pendingSelection?: LineSelection | null;
   currentAuthor?: CommentAuthor;
@@ -46,7 +46,7 @@ interface HunkWithGapProps {
 
 export function HunkWithGap(props: HunkWithGapProps) {
   const {
-    hunk, viewMode, syntaxMap, expandControls, topExpansionLines, gapExpansion, gapId, highlightLine,
+    hunk, viewMode, syntaxMap, expandControls, topExpansionLines, gapExpansion, gapId, highlightCode,
     threads, pendingSelection, currentAuthor, isLineSelected,
     onLineMouseDown, onLineMouseEnter, onCommentClick,
     onAddThread, onReply, onResolve, onUnresolve, onEditComment, onDeleteComment, onDeleteThread,
@@ -61,7 +61,7 @@ export function HunkWithGap(props: HunkWithGapProps) {
     ...(gapExpansion?.linesFromBottom || []),
   ];
   const expansionSyntaxMap = allExpansionLines.length > 0
-    ? buildExpansionSyntaxMap(allExpansionLines, highlightLine)
+    ? buildExpansionSyntaxMap(allExpansionLines, syntaxMap, highlightCode)
     : undefined;
 
   const commentProps = {

@@ -1,29 +1,40 @@
 import type { DiffLine as DiffLineType } from '@diffity/parser';
-import type { HighlightedTokens } from '../../hooks/use-highlighter';
+import type { CodeHighlighter } from '../../hooks/use-highlighter';
 import type { SyntaxToken } from '../../lib/syntax-token';
 import type { ViewMode } from '../../lib/diff-utils';
 import type { LineRenderProps } from '../comments/types';
 import { renderLineWithComments } from './hunk-block';
 import { renderSplitRows } from './hunk-block-split';
 
+function tokensRead(tokens: SyntaxToken[], content: string): boolean {
+  let text = '';
+  for (const token of tokens) {
+    text += token.text;
+  }
+  return text === content;
+}
+
+/** Tokens for expanded context rows: the whole file's when they read the same, else each line on its own. */
 export function buildExpansionSyntaxMap(
   lines: DiffLineType[],
-  highlightLine?: (code: string) => HighlightedTokens[] | null,
+  fileSyntax: Map<string, SyntaxToken[]> | undefined,
+  highlightCode?: CodeHighlighter,
 ): Map<string, SyntaxToken[]> {
   const map = new Map<string, SyntaxToken[]>();
-  if (!highlightLine) {
-    return map;
-  }
   for (const line of lines) {
     if (!line.content) {
       continue;
     }
-    const highlighted = highlightLine(line.content);
-    if (!highlighted || highlighted.length === 0) {
+    const key = `${line.type}-${line.type === 'delete' ? line.oldLineNumber : line.newLineNumber}`;
+    const known = fileSyntax?.get(key);
+    if (known && tokensRead(known, line.content)) {
+      map.set(key, known);
       continue;
     }
-    const key = `${line.type}-${line.type === 'delete' ? line.oldLineNumber : line.newLineNumber}`;
-    map.set(key, highlighted[0].tokens);
+    const tokens = highlightCode?.(line.content)?.lines[0];
+    if (tokens) {
+      map.set(key, tokens);
+    }
   }
   return map;
 }
