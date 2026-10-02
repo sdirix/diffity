@@ -11,6 +11,8 @@ export interface Comment {
   author: CommentAuthor;
   body: string;
   createdAt: string;
+  /** Set for a comment that is on GitHub. */
+  githubCommentId?: number | null;
 }
 
 export type CommentSide = 'old' | 'new';
@@ -28,6 +30,8 @@ export interface CommentThread {
   anchorContent?: string;
   updatedAt?: string;
   sessionId?: string;
+  /** Set for a thread that is on GitHub. */
+  githubThreadId?: string | null;
 }
 
 export const DEFAULT_AUTHOR: CommentAuthor = { name: 'You', type: 'user' };

@@ -3,41 +3,34 @@ export interface GitHubRemote {
   repo: string;
 }
 
-export interface GitHubDetails {
-  prNumber: number;
-  prTitle: string;
-  prUrl: string;
-  prCreatedAt: string;
-  headSha: string;
-  commentCount: number;
+export interface RepoSlug {
+  owner: string;
+  name: string;
 }
 
-export interface PulledThreadComment {
+export interface PullRequest {
+  slug: RepoSlug;
+  /** The GraphQL node id. */
+  id: string;
+  number: number;
+  title: string;
+  url: string;
+  /** `OPEN`, `CLOSED` or `MERGED`. */
+  state: string;
+  isDraft: boolean;
   body: string;
-  authorName: string;
-  authorType: 'user' | 'agent';
   createdAt: string;
-}
-
-export interface PulledThread {
-  filePath: string;
-  side: 'old' | 'new';
-  startLine: number;
-  endLine: number;
-  comments: PulledThreadComment[];
-}
-
-export interface PrComment {
-  filePath: string;
-  side: 'LEFT' | 'RIGHT';
-  startLine: number | null;
-  endLine: number;
-  body: string;
-}
-
-export interface PushResult {
-  pushed: number;
-  skipped: number;
-  failed: number;
-  errors: string[];
+  author: string;
+  authorAvatarUrl: string | null;
+  baseRefName: string;
+  baseRefOid: string;
+  headRefName: string;
+  headRefOid: string;
+  reviewDecision: string | null;
+  additions: number;
+  deletions: number;
+  changedFiles: number;
+  reviewThreadCount: number;
+  /** The account gh is signed in with. */
+  viewerLogin: string | null;
 }

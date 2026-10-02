@@ -1,11 +1,18 @@
 import type { DiffFile, ParsedDiff } from '@diffity/parser';
 import type { CommentThread, CommentAuthor, CommentSide, Comment } from '../components/comments/types';
 
+/** A failed request, with the code the server gave the failure. */
+export class ApiError extends Error {
+  constructor(message: string, readonly code?: string) {
+    super(message);
+  }
+}
+
 async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, init);
   if (!res.ok) {
     const json = await res.json().catch(() => null);
-    throw new Error(json?.error || `HTTP ${res.status}`);
+    throw new ApiError(json?.error || `HTTP ${res.status}`, json?.code);
   }
   return res.json();
 }
@@ -37,13 +44,29 @@ export interface GitHubRemote {
   repo: string;
 }
 
+/** The pull request of the checked out branch. */
 export interface GitHubDetails {
-  prNumber: number;
-  prTitle: string;
-  prUrl: string;
-  prCreatedAt: string;
+  number: number;
+  title: string;
+  url: string;
+  /** `OPEN`, `CLOSED` or `MERGED`. */
+  state: string;
+  isDraft: boolean;
+  body: string;
+  createdAt: string;
+  author: string;
+  authorAvatarUrl: string | null;
+  baseRefName: string;
+  headRefName: string;
   headSha: string;
-  commentCount: number;
+  reviewDecision: string | null;
+  additions: number;
+  deletions: number;
+  changedFiles: number;
+  reviewThreadCount: number;
+  viewerLogin: string | null;
+  /** The view of the pull request's changes, where its review threads are pulled to. */
+  ref: string;
 }
 
 export interface RepoInfo {
@@ -358,21 +381,6 @@ export async function fetchFileContent(
   return json.content;
 }
 
-export interface PushCommentsResult {
-  pushed: number;
-  skipped: number;
-  failed: number;
-  errors: string[];
-}
-
-export interface PrCommentPayload {
-  filePath: string;
-  side: 'LEFT' | 'RIGHT';
-  startLine: number | null;
-  endLine: number;
-  body: string;
-}
-
 export async function fetchGitHubDetails(): Promise<GitHubDetails | null> {
   const res = await fetch('/api/github/details');
   if (!res.ok) {
@@ -381,25 +389,85 @@ export async function fetchGitHubDetails(): Promise<GitHubDetails | null> {
   return res.json();
 }
 
-export function pushCommentsToGitHub(comments: PrCommentPayload[]): Promise<PushCommentsResult> {
-  return apiFetch('/api/github/push-comments', {
+export type ReviewEvent = 'COMMENT' | 'APPROVE' | 'REQUEST_CHANGES';
+
+/** An open thread of this branch's views that is not on GitHub yet. */
+export interface ReviewCandidate {
+  thread: CommentThread & { sessionId: string; createdAt: string };
+  /** The view it was left in. */
+  ref: string;
+  /** Why it cannot be posted, `null` when it can. */
+  reason: string | null;
+}
+
+export interface ReviewCandidates {
+  /** Why nothing can be posted. */
+  blocker: string | null;
+  candidates: ReviewCandidate[];
+  /** Your pending review on GitHub. */
+  pending: { id: string; commentCount: number } | null;
+}
+
+export function fetchReviewCandidates(): Promise<ReviewCandidates> {
+  return apiFetch('/api/github/review-candidates');
+}
+
+export interface ReviewRequest {
+  event: ReviewEvent;
+  body: string;
+  threadIds: string[];
+  pendingAction: 'add' | 'discard' | null;
+}
+
+export interface ReviewResult {
+  posted: number;
+  skipped: string[];
+  errors: string[];
+  url: string | null;
+}
+
+/** Posts a review, failing with code `pending_review_exists` while you have a pending one. */
+export function submitGitHubReview(request: ReviewRequest): Promise<ReviewResult> {
+  return apiFetch('/api/github/review', {
     method: 'POST',
     headers: JSON_HEADERS,
-    body: JSON.stringify({ comments }),
+    body: JSON.stringify(request),
   });
 }
 
-export interface PullCommentsResult {
+export interface PullResult {
   pulled: number;
+  updated: number;
   skipped: number;
+  sessionId: string;
+  ref: string;
 }
 
-export function pullCommentsFromGitHub(sessionId: string): Promise<PullCommentsResult> {
-  return apiFetch('/api/github/pull-comments', {
+/** Pulls the pull request's review threads into its view. */
+export function pullFromGitHub(): Promise<PullResult> {
+  return apiFetch('/api/github/pull', { method: 'POST', headers: JSON_HEADERS, body: '{}' });
+}
+
+/** Replies on the GitHub review thread `threadId` is and stores the reply. */
+export function replyOnGitHub(threadId: string, body: string, author: CommentAuthor): Promise<Comment> {
+  return apiFetch(`/api/github/threads/${threadId}/reply`, {
     method: 'POST',
     headers: JSON_HEADERS,
-    body: JSON.stringify({ sessionId }),
+    body: JSON.stringify({ body, author }),
   });
+}
+
+export function setResolvedOnGitHub(threadId: string, resolved: boolean): Promise<void> {
+  return apiVoid(`/api/github/threads/${threadId}/resolve`, {
+    method: 'POST',
+    headers: JSON_HEADERS,
+    body: JSON.stringify({ resolved }),
+  });
+}
+
+/** Posts a local comment of a GitHub thread, like an agent's reply, as a reply on GitHub. */
+export function postCommentToGitHub(commentId: string): Promise<void> {
+  return apiVoid(`/api/github/comments/${commentId}/post`, { method: 'POST', headers: JSON_HEADERS, body: '{}' });
 }
 
 export interface TourStep {

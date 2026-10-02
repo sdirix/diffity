@@ -4,7 +4,9 @@ import { isThreadResolved } from './types';
 import { CommentBubble } from './comment-bubble';
 import { CommentForm } from './comment-form';
 import { TrashIcon } from '../icons/trash-icon';
+import { GitHubIcon } from '../icons/github-icon';
 import { cn } from '../../lib/cn';
+import { postCommentWithToast } from '../../lib/github-threads';
 
 interface ThreadCardProps {
   thread: CommentThreadType;
@@ -42,6 +44,7 @@ export function ThreadCard(props: ThreadCardProps) {
       <div className="flex items-center justify-between px-3 pt-2.5 pb-1.5">
         <div className="flex items-center gap-2">
           {headerLeft}
+          {thread.githubThreadId && <GitHubIcon className="w-3 h-3 text-text-muted" aria-label="On GitHub" />}
         </div>
         <div className="flex items-center gap-1">
           {onResolve && onUnresolve && (
@@ -79,6 +82,7 @@ export function ThreadCard(props: ThreadCardProps) {
             comment={comment}
             onEdit={(body) => onEditComment(comment.id, body)}
             onDelete={() => onDeleteComment(comment.id)}
+            onPostToGitHub={thread.githubThreadId && !comment.githubCommentId ? () => void postCommentWithToast(comment.id) : undefined}
           />
         ))}
       </div>

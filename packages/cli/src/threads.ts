@@ -12,6 +12,8 @@ export interface ThreadComment {
   author: ThreadAuthor;
   body: string;
   createdAt: string;
+  /** The id of the GitHub review comment it is. */
+  githubCommentId: number | null;
 }
 
 export type ThreadStatus = 'open' | 'resolved' | 'dismissed';
@@ -27,6 +29,8 @@ export interface Thread {
   anchorContent: string | null;
   createdAt: string;
   updatedAt: string;
+  /** The GitHub review thread it is. */
+  githubThreadId: string | null;
   comments: ThreadComment[];
 }
 
@@ -41,6 +45,7 @@ interface ThreadRow {
   anchor_content: string | null;
   created_at: string;
   updated_at: string;
+  github_thread_id: string | null;
 }
 
 interface CommentRow {
@@ -50,6 +55,7 @@ interface CommentRow {
   author_type: string;
   body: string;
   created_at: string;
+  github_comment_id: number | null;
 }
 
 function rowToThread(row: ThreadRow, comments: ThreadComment[]): Thread {
@@ -64,6 +70,7 @@ function rowToThread(row: ThreadRow, comments: ThreadComment[]): Thread {
     anchorContent: row.anchor_content,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    githubThreadId: row.github_thread_id,
     comments,
   };
 }
@@ -74,6 +81,7 @@ function rowToComment(row: CommentRow): ThreadComment {
     author: { name: row.author_name, type: row.author_type as 'user' | 'agent' },
     body: row.body,
     createdAt: row.created_at,
+    githubCommentId: row.github_comment_id,
   };
 }
 
@@ -139,11 +147,13 @@ export function createThread(
     anchorContent: anchorContent ?? null,
     createdAt: now,
     updatedAt: now,
+    githubThreadId: null,
     comments: [{
       id: commentId,
       author,
       body: cleanBody,
       createdAt: now,
+      githubCommentId: null,
     }],
   };
 }
@@ -154,6 +164,7 @@ interface JoinedRow extends ThreadRow {
   c_author_type: string | null;
   c_body: string | null;
   c_created_at: string | null;
+  c_github_comment_id: number | null;
 }
 
 export function getThreadsForSession(sessionId: string, status?: ThreadStatus): Thread[] {
@@ -165,7 +176,7 @@ export function getThreadsForSession(sessionId: string, status?: ThreadStatus): 
   const rows = queryAll<JoinedRow>(`
     SELECT t.*,
            c.id AS c_id, c.author_name AS c_author_name, c.author_type AS c_author_type,
-           c.body AS c_body, c.created_at AS c_created_at
+           c.body AS c_body, c.created_at AS c_created_at, c.github_comment_id AS c_github_comment_id
     FROM comment_threads t
     LEFT JOIN comments c ON c.thread_id = t.id
     ${where}
@@ -185,6 +196,7 @@ export function getThreadsForSession(sessionId: string, status?: ThreadStatus): 
         author: { name: row.c_author_name!, type: row.c_author_type as 'user' | 'agent' },
         body: row.c_body!,
         createdAt: row.c_created_at!,
+        githubCommentId: row.c_github_comment_id,
       });
     }
   }
@@ -265,6 +277,7 @@ export function addReply(threadId: string, body: string, author: ThreadAuthor): 
     author,
     body: cleanBody,
     createdAt: now,
+    githubCommentId: null,
   };
 }
 

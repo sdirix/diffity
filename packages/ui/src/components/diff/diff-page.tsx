@@ -1,6 +1,6 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { useLoaderData, useSearchParams } from 'react-router';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import type { ParsedDiff } from '@diffity/parser';
 import { useDiff } from '../../hooks/use-diff';
@@ -50,7 +50,8 @@ import { type ViewMode, getFilePath, getAutoCollapsedPaths } from '../../lib/dif
 import { buildFirstOpenThreadByFile, buildThreadCountsByFile } from '../../lib/comment-navigation';
 import { getOutsideThreads, locateViewThreads } from '../../lib/thread-location';
 import { getHunkHeaders, scrollToElement } from '../../lib/dom-utils';
-import { fetchGitHubDetails, type GitHubDetails } from '../../lib/api';
+import { githubDetailsOptions } from '../../queries/github';
+import { useAutoSync } from '../../lib/github-sync';
 import { readViewState, useViewState, writeViewState } from '../../lib/view-state';
 import { shortcutHint } from '../../lib/shortcuts';
 import { readPreference, useSettings, writePreference } from '../../lib/preferences';
@@ -169,20 +170,12 @@ export function DiffPage() {
     });
   }, []);
   const { isStale, resetStaleness } = useDiffStaleness(diff.fingerprint, refParam, showHidden, !!info?.capabilities?.staleness);
-  const [githubDetails, setGithubDetails] = useState<GitHubDetails | null>(null);
-
-  useEffect(() => {
-    if (!info?.github) {
-      return;
-    }
-    fetchGitHubDetails()
-      .then(data => setGithubDetails(data))
-      .catch(() => {});
-  }, [info?.github]);
+  const { data: githubDetails = null } = useQuery(githubDetailsOptions(!!info?.github));
+  useAutoSync(reviewsEnabled && !!githubDetails && githubDetails.ref === refParam);
 
   const { data: serverThreads, isFetched: threadsFetched } = useReviewThreads(reviewsEnabled ? sessionId : null);
   const threads = reviewsEnabled && serverThreads ? serverThreads : NO_THREADS;
-  const commentActions = useCommentActions(sessionId, reviewsEnabled);
+  const commentActions = useCommentActions(sessionId, reviewsEnabled, threads);
   const commentCountsByFile = useMemo(() => buildThreadCountsByFile(threads), [threads]);
   const threadLocations = useThreadLocations(reviewsEnabled ? sessionId : null, threads, diffVersion);
   const outsideThreads = useMemo(() => getOutsideThreads(threads, diff), [threads, diff]);
@@ -722,8 +715,6 @@ export function DiffPage() {
         repoName={info?.name || null}
         branch={info?.branch || null}
         githubDetails={githubDetails}
-        sessionId={sessionId}
-        onGitHubPulled={() => queryClient.invalidateQueries({ queryKey: ['threads'] })}
         hiddenFiles={{ files: diff.hiddenFiles ?? [], showing: showHidden, onShowingChange: setShowHidden }}
         commentsPanel={reviewsEnabled ? { open: commentsOpen, openCount: openThreadCount, onToggle: toggleComments } : undefined}
       />

@@ -3,15 +3,19 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { Components } from 'react-markdown';
 import { useHighlighter } from '../../hooks/use-highlighter';
+import { SANITIZED_HTML_PLUGINS } from '../../lib/markdown';
+import { cn } from '../../lib/cn';
 import { useDocumentTheme } from '../../hooks/use-theme';
 import { MermaidDiagram } from '../mermaid-diagram';
 
 interface MarkdownContentProps {
   content: string;
+  /** Renders the HTML in it as GitHub does, sanitized. For text from GitHub, like PR descriptions and bot comments. */
+  html?: boolean;
 }
 
 export function MarkdownContent(props: MarkdownContentProps) {
-  const { content } = props;
+  const { content, html = false } = props;
   const { highlight, ready } = useHighlighter();
   const theme = useDocumentTheme();
 
@@ -32,8 +36,18 @@ export function MarkdownContent(props: MarkdownContentProps) {
         </a>
       );
     },
-    ul({ children }) {
-      return <ul className="list-disc pl-4 mb-1.5 last:mb-0">{children}</ul>;
+    img({ src, alt, width, height }) {
+      return <img src={typeof src === 'string' ? src : undefined} alt={alt} width={width} height={height} className="inline max-w-full h-auto rounded" />;
+    },
+    details({ children }) {
+      return <details className="mb-1.5 last:mb-0 rounded-md border border-border px-2.5 py-1.5">{children}</details>;
+    },
+    summary({ children }) {
+      return <summary className="cursor-pointer select-none font-medium text-text">{children}</summary>;
+    },
+    ul({ children, className }) {
+      const tasks = className?.includes('contains-task-list');
+      return <ul className={cn('mb-1.5 last:mb-0', tasks ? 'list-none pl-0.5' : 'list-disc pl-4')}>{children}</ul>;
     },
     ol({ children }) {
       return <ol className="list-decimal pl-4 mb-1.5 last:mb-0">{children}</ol>;
@@ -142,7 +156,7 @@ export function MarkdownContent(props: MarkdownContentProps) {
 
   return (
     <div className="markdown-body">
-      <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
+      <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={html ? SANITIZED_HTML_PLUGINS : undefined} components={components}>
         {content}
       </ReactMarkdown>
     </div>

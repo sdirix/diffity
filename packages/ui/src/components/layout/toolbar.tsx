@@ -14,6 +14,7 @@ import { CommentIcon } from '../icons/comment-icon';
 import { DiffStats } from '../diff/diff-stats';
 import { HiddenFilesChip } from '../diff/hidden-files-chip';
 import { GitHubDialog } from './github-dialog';
+import { SubmitReviewDialog } from './submit-review-dialog';
 import { CommentToolbarActions } from '../comments/comment-toolbar-actions';
 import { OptionsMenu, menuItemClass } from './options-menu';
 import { RefMenu, UncommittedToggle } from './ref-menu';
@@ -21,6 +22,7 @@ import { ViewTabs } from './view-tabs';
 import { InstanceSwitcher } from './instance-switcher';
 import { GENERAL_THREAD_FILE_PATH } from '../comments/types';
 import type { ViewMode } from '../../lib/diff-utils';
+import type { GitHubDetails } from '../../lib/api';
 import type { CommentThread } from '../comments/types';
 import { isThreadResolved } from '../comments/types';
 import { shortcutHint } from '../../lib/shortcuts';
@@ -45,9 +47,7 @@ interface ToolbarProps {
   onScrollToThread: (threadId: string, filePath: string) => void;
   repoName: string | null;
   branch: string | null;
-  githubDetails?: { prNumber: number; prTitle: string; prUrl: string; prCreatedAt: string; headSha: string; commentCount: number } | null;
-  sessionId?: string | null;
-  onGitHubPulled?: () => void;
+  githubDetails?: GitHubDetails | null;
   hiddenFiles?: { files: string[]; showing: boolean; onShowingChange: (showing: boolean) => void };
   /** Shows the comments panel toggle when set. */
   commentsPanel?: { open: boolean; openCount: number; onToggle: () => void };
@@ -146,21 +146,37 @@ export function Toolbar(props: ToolbarProps) {
     repoName,
     branch,
     githubDetails,
-    sessionId,
-    onGitHubPulled,
     hiddenFiles,
     commentsPanel,
   } = props;
   const [showGitHub, setShowGitHub] = useState(false);
+  const [showReview, setShowReview] = useState(false);
+  const canReview = githubDetails?.state === 'OPEN';
   const diffPalette = useDiffPalette();
 
-  const paletteActions = useMemo<PaletteAction[]>(() => githubDetails ? [{
-    id: 'github-pr',
-    title: `Pull request #${githubDetails.prNumber}`,
-    keywords: `github pr push pull comments ${githubDetails.prTitle}`,
-    icon: <GitHubIcon className="w-3.5 h-3.5" />,
-    run: () => setShowGitHub(true),
-  }] : [], [githubDetails]);
+  const paletteActions = useMemo<PaletteAction[]>(() => {
+    if (!githubDetails) {
+      return [];
+    }
+    const list: PaletteAction[] = [{
+      id: 'github-pr',
+      title: `Pull request #${githubDetails.number}`,
+      keywords: `github pr sync pull review threads comments ${githubDetails.title}`,
+      icon: <GitHubIcon className="w-3.5 h-3.5" />,
+      run: () => setShowGitHub(true),
+    }];
+    if (githubDetails.state === 'OPEN') {
+      list.push({
+        id: 'github-review',
+        title: `Submit review to #${githubDetails.number}`,
+        group: 'Comments',
+        keywords: 'github pr post approve request changes',
+        icon: <GitHubIcon className="w-3.5 h-3.5" />,
+        run: () => setShowReview(true),
+      });
+    }
+    return list;
+  }, [githubDetails]);
   usePaletteActions('github', paletteActions);
 
   const formatForCopy = useCallback(() => {
@@ -201,7 +217,16 @@ export function Toolbar(props: ToolbarProps) {
             className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-bg-tertiary rounded-md font-mono text-[11px] text-text-muted hover:text-text transition-colors cursor-pointer shrink-0"
           >
             <GitHubIcon className="w-3 h-3" />
-            #{githubDetails.prNumber}
+            #{githubDetails.number}
+          </button>
+        )}
+        {canReview && (
+          <button
+            onClick={() => setShowReview(true)}
+            className="px-1.5 py-0.5 rounded-md text-[11px] font-medium bg-accent/15 text-accent hover:bg-accent/25 transition-colors cursor-pointer shrink-0"
+            title={`Post your comments as a review of #${githubDetails!.number}`}
+          >
+            Review
           </button>
         )}
       </div>
@@ -275,11 +300,16 @@ export function Toolbar(props: ToolbarProps) {
       {showGitHub && githubDetails && (
         <GitHubDialog
           details={githubDetails}
-          threads={threads}
-          sessionId={sessionId ?? null}
-          onPulled={() => onGitHubPulled?.()}
+          diffRef={diffRef}
+          onSubmitReview={() => {
+            setShowGitHub(false);
+            setShowReview(true);
+          }}
           onClose={() => setShowGitHub(false)}
         />
+      )}
+      {showReview && githubDetails && (
+        <SubmitReviewDialog details={githubDetails} branch={branch} onClose={() => setShowReview(false)} />
       )}
     </div>
   );

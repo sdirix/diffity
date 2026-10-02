@@ -2,12 +2,15 @@ import { useState, useRef, useEffect } from 'react';
 import type { Comment } from './types';
 import { PencilIcon } from '../icons/pencil-icon';
 import { TrashIcon } from '../icons/trash-icon';
+import { UploadIcon } from '../icons/upload-icon';
 import { MarkdownContent } from '../layout/markdown-content';
 
 interface CommentBubbleProps {
   comment: Comment;
   onEdit: (body: string) => void;
   onDelete: () => void;
+  /** Set for a local comment of a thread that is on GitHub. */
+  onPostToGitHub?: () => void;
 }
 
 export function formatRelativeTime(dateStr: string): string {
@@ -54,7 +57,8 @@ function AuthorAvatar(props: { name: string; avatarUrl?: string; type: 'user' | 
 }
 
 export function CommentBubble(props: CommentBubbleProps) {
-  const { comment, onEdit, onDelete } = props;
+  const { comment, onEdit, onDelete, onPostToGitHub } = props;
+  const onGitHub = !!comment.githubCommentId;
   const [isEditing, setIsEditing] = useState(false);
   const [editBody, setEditBody] = useState(comment.body);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -104,15 +108,28 @@ export function CommentBubble(props: CommentBubbleProps) {
             <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-accent/15 text-accent font-medium">bot</span>
           )}
           <span className="text-[11px] text-text-muted">{formatRelativeTime(comment.createdAt)}</span>
+          {onPostToGitHub && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-bg-tertiary text-text-muted">Local</span>}
           {!isEditing && (
             <div className="ml-auto flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-              <button
-                onClick={() => setIsEditing(true)}
-                className="text-text-muted hover:text-text cursor-pointer"
-                title="Edit comment"
-              >
-                <PencilIcon className="w-3.5 h-3.5" />
-              </button>
+              {onPostToGitHub && (
+                <button
+                  onClick={onPostToGitHub}
+                  className="inline-flex items-center gap-1 text-[11px] text-text-muted hover:text-text cursor-pointer"
+                  title="Post this reply on GitHub"
+                >
+                  <UploadIcon className="w-3 h-3" />
+                  Post to GitHub
+                </button>
+              )}
+              {!onGitHub && (
+                <button
+                  onClick={() => setIsEditing(true)}
+                  className="text-text-muted hover:text-text cursor-pointer"
+                  title="Edit comment"
+                >
+                  <PencilIcon className="w-3.5 h-3.5" />
+                </button>
+              )}
               <button
                 onClick={onDelete}
                 className="text-text-muted hover:text-deleted cursor-pointer"
@@ -152,7 +169,7 @@ export function CommentBubble(props: CommentBubbleProps) {
             </div>
           </div>
         ) : (
-          <MarkdownContent content={comment.body} />
+          <MarkdownContent content={comment.body} html={onGitHub} />
         )}
         </div>
       </div>

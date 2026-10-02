@@ -1,10 +1,14 @@
-import { useCallback } from 'react';
+import { useCallback, useRef } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import type { CommentAuthor, CommentSide } from '../components/comments/types';
+import type { CommentAuthor, CommentSide, CommentThread } from '../components/comments/types';
 import * as api from '../lib/api';
+import { replyOnGitHubWithToast, setResolvedWithToast } from '../lib/github-threads';
 
-export function useCommentActions(sessionId: string | null, enabled: boolean) {
+/** Comment actions. Replies, resolves and reopens of threads in `threads` that are on GitHub go to GitHub too. */
+export function useCommentActions(sessionId: string | null, enabled: boolean, threads?: CommentThread[]) {
   const queryClient = useQueryClient();
+  const onGitHub = useRef(new Set<string>());
+  onGitHub.current = new Set((threads ?? []).filter((thread) => thread.githubThreadId).map((thread) => thread.id));
 
   const invalidateThreads = useCallback(() => {
     queryClient.invalidateQueries({ queryKey: ['threads', sessionId] });
@@ -23,6 +27,10 @@ export function useCommentActions(sessionId: string | null, enabled: boolean) {
     if (!enabled) {
       return;
     }
+    if (onGitHub.current.has(threadId)) {
+      void replyOnGitHubWithToast(threadId, body, author);
+      return;
+    }
     api.replyToThread(threadId, body, author).then(() => {
       invalidateThreads();
     });
@@ -32,6 +40,10 @@ export function useCommentActions(sessionId: string | null, enabled: boolean) {
     if (!enabled) {
       return;
     }
+    if (onGitHub.current.has(threadId)) {
+      void setResolvedWithToast(threadId, true);
+      return;
+    }
     api.updateThreadStatus(threadId, 'resolved').then(() => {
       invalidateThreads();
     });
@@ -39,6 +51,10 @@ export function useCommentActions(sessionId: string | null, enabled: boolean) {
 
   const unresolveThread = useCallback((threadId: string) => {
     if (!enabled) {
+      return;
+    }
+    if (onGitHub.current.has(threadId)) {
+      void setResolvedWithToast(threadId, false);
       return;
     }
     api.updateThreadStatus(threadId, 'open').then(() => {

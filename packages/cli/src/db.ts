@@ -174,6 +174,15 @@ const MIGRATIONS: ((db: DatabaseSync) => void)[] = [
     UPDATE review_sessions SET scope = NULL
     WHERE scope = '' AND ref <> '__tree__' AND instr(ref, '..') = 0;
   `),
+  // The GitHub review thread and comment a local one is. `github_resolved` is the state GitHub reported
+  // last, so a sync only applies what changed there. `github_review_id` marks threads posted in a review body.
+  (db) => db.exec(`
+    ALTER TABLE comment_threads ADD COLUMN github_thread_id TEXT;
+    ALTER TABLE comment_threads ADD COLUMN github_resolved INTEGER;
+    ALTER TABLE comment_threads ADD COLUMN github_review_id TEXT;
+    ALTER TABLE comments ADD COLUMN github_comment_id INTEGER;
+    CREATE INDEX idx_threads_github ON comment_threads(github_thread_id);
+  `),
 ];
 
 function userVersion(db: DatabaseSync): number {

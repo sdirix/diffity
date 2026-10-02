@@ -25,8 +25,6 @@ import {
   revertFile,
   revertHunk,
   getRefCapabilities,
-  getHeadHash,
-  isDirty,
   getTree,
   getTreeEntries,
   getTreeFingerprint,
@@ -37,17 +35,10 @@ import {
   type BaseSource,
   type DiffOptions,
 } from '@diffity/git';
-import {
-  detectRemote as detectGitHubRemote,
-  fetchDetails as fetchGitHubDetails,
-  pushComments as pushGitHubComments,
-  pullComments as pullGitHubComments,
-  type PrComment,
-} from '@diffity/github';
+import { detectRemote as detectGitHubRemote } from '@diffity/github';
 import { findOrCreateSession, setCurrentSession, TREE_REF } from './session.js';
-import { createThread, addReply, getThreadsForSession } from './threads.js';
-import { transaction } from './db.js';
 import { handleReviewRoute } from './review-routes.js';
+import { handleGitHubRoute } from './github-routes.js';
 import { handleTourRoute } from './tour-routes.js';
 import { handleRefRoute } from './ref-routes.js';
 import { handleRepoThreadRoute } from './repo-thread-routes.js';
@@ -401,109 +392,7 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
           return;
         }
 
-        if (pathname === '/api/github/details') {
-          if (!githubRemote) {
-            sendJson(res, null);
-            return;
-          }
-          const details = fetchGitHubDetails(githubRemote.owner, githubRemote.repo);
-          sendJson(res, details);
-          return;
-        }
-
-        if (pathname === '/api/github/push-comments' && req.method === 'POST') {
-          const details = githubRemote ? fetchGitHubDetails(githubRemote.owner, githubRemote.repo) : null;
-          if (!githubRemote || !details?.headSha) {
-            sendError(res, 400, 'No GitHub PR detected');
-            return;
-          }
-          const localHead = getHeadHash();
-          if (localHead !== details.headSha) {
-            sendError(res, 409, 'Local branch is out of sync with the PR. Push or pull your git changes first.');
-            return;
-          }
-          if (isDirty()) {
-            sendError(res, 409, 'You have uncommitted local changes. Commit or stash them first.');
-            return;
-          }
-          const body = JSON.parse(await readBody(req));
-          const comments = body.comments as PrComment[];
-          if (!Array.isArray(comments) || comments.length === 0) {
-            sendError(res, 400, 'No comments provided');
-            return;
-          }
-          const result = pushGitHubComments(
-            githubRemote.owner,
-            githubRemote.repo,
-            details.prNumber,
-            details.headSha,
-            comments,
-          );
-          sendJson(res, result);
-          return;
-        }
-
-        if (pathname === '/api/github/pull-comments' && req.method === 'POST') {
-          if (!githubRemote) {
-            sendError(res, 400, 'No GitHub repo detected');
-            return;
-          }
-          const details = fetchGitHubDetails(githubRemote.owner, githubRemote.repo);
-          if (!details) {
-            sendError(res, 400, 'No GitHub PR detected');
-            return;
-          }
-          const body = JSON.parse(await readBody(req));
-          const { sessionId: sid } = body;
-          if (!sid) {
-            sendError(res, 400, 'Missing sessionId');
-            return;
-          }
-
-          const localHead = getHeadHash();
-          if (localHead !== details.headSha) {
-            sendError(res, 409, 'Local branch is out of sync with the PR. Push or pull your git changes first.');
-            return;
-          }
-          if (isDirty()) {
-            sendError(res, 409, 'You have uncommitted local changes. Commit or stash them first.');
-            return;
-          }
-
-          const remoteThreads = pullGitHubComments(githubRemote.owner, githubRemote.repo, details.prNumber);
-          const localThreads = getThreadsForSession(sid);
-
-          let pulled = 0;
-          let skipped = 0;
-          transaction(() => {
-            for (const rt of remoteThreads) {
-              const firstComment = rt.comments[0];
-              const alreadyExists = localThreads.some(t =>
-                t.filePath === rt.filePath &&
-                t.side === rt.side &&
-                t.startLine === rt.startLine &&
-                t.endLine === rt.endLine &&
-                t.comments.some(c => c.body === firstComment.body),
-              );
-              if (alreadyExists) {
-                skipped++;
-                continue;
-              }
-              const thread = createThread(sid, rt.filePath, rt.side, rt.startLine, rt.endLine, firstComment.body, {
-                name: firstComment.authorName,
-                type: firstComment.authorType,
-              });
-              for (let i = 1; i < rt.comments.length; i++) {
-                const reply = rt.comments[i];
-                addReply(thread.id, reply.body, {
-                  name: reply.authorName,
-                  type: reply.authorType,
-                });
-              }
-              pulled++;
-            }
-          });
-          sendJson(res, { pulled, skipped });
+        if (await handleGitHubRoute(req, res, pathname, githubRemote)) {
           return;
         }
 
