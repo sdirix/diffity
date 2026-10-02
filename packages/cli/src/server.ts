@@ -50,8 +50,9 @@ import {
   pullComments as pullGitHubComments,
   type PrComment,
 } from '@diffity/github';
-import { findOrCreateSession } from './session.js';
+import { findOrCreateSession, setCurrentSession, TREE_REF } from './session.js';
 import { createThread, addReply, getThreadsForSession } from './threads.js';
+import { transaction } from './db.js';
 import { handleReviewRoute } from './review-routes.js';
 import { handleTourRoute } from './tour-routes.js';
 import { sendJson, sendError, readBody } from './http-utils.js';
@@ -420,6 +421,7 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
           let sessionId: string | null = null;
           if (ref) {
             const session = findOrCreateSession(ref);
+            setCurrentSession(session);
             sessionId = session.id;
           }
           sendJson(res, {
@@ -507,32 +509,34 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
 
           let pulled = 0;
           let skipped = 0;
-          for (const rt of remoteThreads) {
-            const firstComment = rt.comments[0];
-            const alreadyExists = localThreads.some(t =>
-              t.filePath === rt.filePath &&
-              t.side === rt.side &&
-              t.startLine === rt.startLine &&
-              t.endLine === rt.endLine &&
-              t.comments.some(c => c.body === firstComment.body),
-            );
-            if (alreadyExists) {
-              skipped++;
-              continue;
-            }
-            const thread = createThread(sid, rt.filePath, rt.side, rt.startLine, rt.endLine, firstComment.body, {
-              name: firstComment.authorName,
-              type: firstComment.authorType,
-            });
-            for (let i = 1; i < rt.comments.length; i++) {
-              const reply = rt.comments[i];
-              addReply(thread.id, reply.body, {
-                name: reply.authorName,
-                type: reply.authorType,
+          transaction(() => {
+            for (const rt of remoteThreads) {
+              const firstComment = rt.comments[0];
+              const alreadyExists = localThreads.some(t =>
+                t.filePath === rt.filePath &&
+                t.side === rt.side &&
+                t.startLine === rt.startLine &&
+                t.endLine === rt.endLine &&
+                t.comments.some(c => c.body === firstComment.body),
+              );
+              if (alreadyExists) {
+                skipped++;
+                continue;
+              }
+              const thread = createThread(sid, rt.filePath, rt.side, rt.startLine, rt.endLine, firstComment.body, {
+                name: firstComment.authorName,
+                type: firstComment.authorType,
               });
+              for (let i = 1; i < rt.comments.length; i++) {
+                const reply = rt.comments[i];
+                addReply(thread.id, reply.body, {
+                  name: reply.authorName,
+                  type: reply.authorType,
+                });
+              }
+              pulled++;
             }
-            pulled++;
-          }
+          });
           sendJson(res, { pulled, skipped });
           return;
         }
@@ -599,7 +603,8 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
 
         if (pathname === '/api/tree/info') {
           const info = getRepoInfo();
-          const session = findOrCreateSession('__tree__');
+          const session = findOrCreateSession(TREE_REF);
+          setCurrentSession(session);
           sendJson(res, {
             ...info,
             description: 'Repository file browser',
@@ -664,7 +669,7 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
       const addr = server.address();
       if (addr && typeof addr !== 'string') {
         if (effectiveRef) {
-          findOrCreateSession(effectiveRef);
+          setCurrentSession(findOrCreateSession(effectiveRef));
         }
         if (registryInfo) {
           registerInstance({

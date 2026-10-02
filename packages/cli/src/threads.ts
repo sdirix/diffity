@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { getDb, queryAll, queryOne } from './db.js';
+import { getDb, queryAll, queryOne, transaction } from './db.js';
 import { unescapeMarkdown } from './unescape.js';
 
 export interface ThreadAuthor {
@@ -118,13 +118,15 @@ export function createThread(
 
   const cleanBody = unescapeMarkdown(body);
 
-  db.prepare(
-    'INSERT INTO comment_threads (id, session_id, file_path, side, start_line, end_line, anchor_content, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
-  ).run(threadId, sessionId, filePath, side, startLine, endLine, anchorContent ?? null, now, now);
+  transaction(() => {
+    db.prepare(
+      'INSERT INTO comment_threads (id, session_id, file_path, side, start_line, end_line, anchor_content, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+    ).run(threadId, sessionId, filePath, side, startLine, endLine, anchorContent ?? null, now, now);
 
-  db.prepare(
-    'INSERT INTO comments (id, thread_id, author_name, author_type, body, created_at) VALUES (?, ?, ?, ?, ?, ?)'
-  ).run(commentId, threadId, author.name, author.type, cleanBody, now);
+    db.prepare(
+      'INSERT INTO comments (id, thread_id, author_name, author_type, body, created_at) VALUES (?, ?, ?, ?, ?, ?)'
+    ).run(commentId, threadId, author.name, author.type, cleanBody, now);
+  });
 
   return {
     id: threadId,
@@ -189,18 +191,50 @@ export function getThreadsForSession(sessionId: string, status?: ThreadStatus): 
   return Array.from(threads.values());
 }
 
-export function getThread(idOrPrefix: string): Thread | null {
-  let row = queryOne<ThreadRow>('SELECT * FROM comment_threads WHERE id = ?', idOrPrefix);
+function escapeLike(value: string): string {
+  return value.replace(/[\\%_]/g, (c) => `\\${c}`);
+}
 
-  if (!row && idOrPrefix.length >= 8) {
-    row = queryOne<ThreadRow>('SELECT * FROM comment_threads WHERE id LIKE ?', idOrPrefix + '%');
+function findThreadRows(idOrPrefix: string, sessionId: string | null): ThreadRow[] {
+  const scoped = sessionId === null ? '' : ' AND session_id = ?';
+  const params = sessionId === null ? [] : [sessionId];
+  const exact = queryOne<ThreadRow>(`SELECT * FROM comment_threads WHERE id = ?${scoped}`, idOrPrefix, ...params);
+  if (exact || idOrPrefix.length < 8) {
+    return exact ? [exact] : [];
   }
+  return queryAll<ThreadRow>(
+    `SELECT * FROM comment_threads WHERE id LIKE ? ESCAPE '\\'${scoped} LIMIT 2`,
+    `${escapeLike(idOrPrefix)}%`,
+    ...params,
+  );
+}
 
-  if (!row) {
-    return null;
+/**
+ * The thread of `sessionId` with the id `idOrPrefix`, or the one whose id
+ * starts with it. A prefix needs 8 characters and has to be unambiguous.
+ */
+export function findThread(sessionId: string, idOrPrefix: string): Thread {
+  const id = idOrPrefix.trim();
+  const rows = findThreadRows(id, sessionId);
+  if (rows.length > 1) {
+    throw new Error(`Thread id prefix "${id}" is ambiguous, use more characters`);
   }
-
-  return rowToThread(row, getCommentsForThread(row.id));
+  if (rows.length === 1) {
+    return rowToThread(rows[0], getCommentsForThread(rows[0].id));
+  }
+  if (id.length < 8) {
+    throw new Error(`Thread not found: ${id} (use at least 8 characters of the id)`);
+  }
+  const elsewhere = findThreadRows(id, null)[0];
+  if (elsewhere) {
+    const session = queryOne<{ ref: string; scope: string | null }>(
+      'SELECT ref, scope FROM review_sessions WHERE id = ?',
+      elsewhere.session_id,
+    );
+    const where = session ? ` (ref "${session.ref}"${session.scope ? ` on ${session.scope}` : ''})` : '';
+    throw new Error(`Thread ${id} belongs to another session${where}`);
+  }
+  throw new Error(`Thread not found: ${id}`);
 }
 
 export function addReply(threadId: string, body: string, author: ThreadAuthor): ThreadComment {
@@ -209,19 +243,21 @@ export function addReply(threadId: string, body: string, author: ThreadAuthor): 
   const now = new Date().toISOString();
   const cleanBody = unescapeMarkdown(body);
 
-  db.prepare(
-    'INSERT INTO comments (id, thread_id, author_name, author_type, body, created_at) VALUES (?, ?, ?, ?, ?, ?)'
-  ).run(commentId, threadId, author.name, author.type, cleanBody, now);
+  transaction(() => {
+    db.prepare(
+      'INSERT INTO comments (id, thread_id, author_name, author_type, body, created_at) VALUES (?, ?, ?, ?, ?, ?)'
+    ).run(commentId, threadId, author.name, author.type, cleanBody, now);
 
-  if (author.type === 'user') {
-    db.prepare(
-      'UPDATE comment_threads SET status = ?, updated_at = ? WHERE id = ?'
-    ).run('open', now, threadId);
-  } else {
-    db.prepare(
-      'UPDATE comment_threads SET updated_at = ? WHERE id = ?'
-    ).run(now, threadId);
-  }
+    if (author.type === 'user') {
+      db.prepare(
+        'UPDATE comment_threads SET status = ?, updated_at = ? WHERE id = ?'
+      ).run('open', now, threadId);
+    } else {
+      db.prepare(
+        'UPDATE comment_threads SET updated_at = ? WHERE id = ?'
+      ).run(now, threadId);
+    }
+  });
 
   return {
     id: commentId,
@@ -235,17 +271,19 @@ export function updateThreadStatus(threadId: string, status: ThreadStatus, summa
   const db = getDb();
   const now = new Date().toISOString();
 
-  db.prepare(
-    'UPDATE comment_threads SET status = ?, updated_at = ? WHERE id = ?'
-  ).run(status, now, threadId);
-
-  if (summaryBody && summaryAuthor) {
-    const commentId = randomUUID();
-    const cleanSummary = unescapeMarkdown(summaryBody);
+  transaction(() => {
     db.prepare(
-      'INSERT INTO comments (id, thread_id, author_name, author_type, body, created_at) VALUES (?, ?, ?, ?, ?, ?)'
-    ).run(commentId, threadId, summaryAuthor.name, summaryAuthor.type, cleanSummary, now);
-  }
+      'UPDATE comment_threads SET status = ?, updated_at = ? WHERE id = ?'
+    ).run(status, now, threadId);
+
+    if (summaryBody && summaryAuthor) {
+      const commentId = randomUUID();
+      const cleanSummary = unescapeMarkdown(summaryBody);
+      db.prepare(
+        'INSERT INTO comments (id, thread_id, author_name, author_type, body, created_at) VALUES (?, ?, ?, ?, ?, ?)'
+      ).run(commentId, threadId, summaryAuthor.name, summaryAuthor.type, cleanSummary, now);
+    }
+  });
 }
 
 export function deleteThread(threadId: string): void {
@@ -265,15 +303,17 @@ export function editComment(commentId: string, body: string): void {
 
 export function deleteComment(commentId: string): void {
   const db = getDb();
-  const comment = queryOne<{ thread_id: string }>('SELECT thread_id FROM comments WHERE id = ?', commentId);
-  if (!comment) {
-    return;
-  }
+  transaction(() => {
+    const comment = queryOne<{ thread_id: string }>('SELECT thread_id FROM comments WHERE id = ?', commentId);
+    if (!comment) {
+      return;
+    }
 
-  db.prepare('DELETE FROM comments WHERE id = ?').run(commentId);
+    db.prepare('DELETE FROM comments WHERE id = ?').run(commentId);
 
-  const remaining = queryOne<{ count: number }>('SELECT COUNT(*) as count FROM comments WHERE thread_id = ?', comment.thread_id);
-  if (remaining?.count === 0) {
-    db.prepare('DELETE FROM comment_threads WHERE id = ?').run(comment.thread_id);
-  }
+    const remaining = queryOne<{ count: number }>('SELECT COUNT(*) as count FROM comments WHERE thread_id = ?', comment.thread_id);
+    if (remaining?.count === 0) {
+      db.prepare('DELETE FROM comment_threads WHERE id = ?').run(comment.thread_id);
+    }
+  });
 }

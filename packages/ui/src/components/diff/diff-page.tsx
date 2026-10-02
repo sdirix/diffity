@@ -256,6 +256,7 @@ export function DiffPage() {
   const handleRefreshDiff = useCallback(() => {
     queryClient.invalidateQueries({ queryKey: ['diff'] });
     queryClient.invalidateQueries({ queryKey: ['file-content'] });
+    queryClient.invalidateQueries({ queryKey: ['repo-info'] });
     resetStaleness();
   }, [queryClient, resetStaleness]);
 

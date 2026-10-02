@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { getDb, queryAll, queryOne } from './db.js';
+import { getDb, queryAll, queryOne, transaction } from './db.js';
 import { unescapeMarkdown } from './unescape.js';
 
 export type TourStatus = 'building' | 'ready';
@@ -170,18 +170,21 @@ export function addTourStep(
   const id = randomUUID();
   const now = new Date().toISOString();
 
-  const maxRow = queryOne<{ max_order: number }>(
-    'SELECT COALESCE(MAX(sort_order), 0) AS max_order FROM tour_steps WHERE tour_id = ?',
-    tourId,
-  );
-  const sortOrder = (maxRow?.max_order ?? 0) + 1;
-
   const cleanBody = unescapeMarkdown(body);
   const cleanAnnotation = unescapeMarkdown(annotation);
 
-  db.prepare(
-    'INSERT INTO tour_steps (id, tour_id, sort_order, file_path, start_line, end_line, body, annotation, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
-  ).run(id, tourId, sortOrder, filePath, startLine, endLine, cleanBody, cleanAnnotation, now);
+  // Numbered under the write lock, so steps added at the same time get distinct positions.
+  const sortOrder = transaction(() => {
+    const maxRow = queryOne<{ max_order: number }>(
+      'SELECT COALESCE(MAX(sort_order), 0) AS max_order FROM tour_steps WHERE tour_id = ?',
+      tourId,
+    );
+    const next = (maxRow?.max_order ?? 0) + 1;
+    db.prepare(
+      'INSERT INTO tour_steps (id, tour_id, sort_order, file_path, start_line, end_line, body, annotation, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+    ).run(id, tourId, next, filePath, startLine, endLine, cleanBody, cleanAnnotation, now);
+    return next;
+  });
 
   return {
     id,

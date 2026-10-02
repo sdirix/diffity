@@ -3,7 +3,7 @@ export type { RefCapabilities } from './repo.js';
 export { isGitRepo, getRepoRoot, getRepoName, getCurrentBranch, getRepoInfo, getDiffityDir, getDiffityDirPath, getRefCapabilities, isValidGitRef, getRemoteUrl, fetchRemoteBranch } from './repo.js';
 export { getDiff, getDiffFiles, getDiffStat, getDiffStatForRef, getUntrackedFiles, getFileContent, getIndexFileContent, getBaseFileContent, getFileLineCounts, normalizeRef, resolveBaseRef, resolveHeadRef, resolveDiffArgs, resolveRef, revertFile, revertHunk, WORKING_TREE_REFS } from './diff.js';
 export type { RefDiffArgs, BaseSource, HeadSource } from './diff.js';
-export { getMergeBase, verifyCommit, getHeadHash } from './refs.js';
+export { getMergeBase, verifyCommit, getHeadHash, isAncestor, getBranchReflog } from './refs.js';
 export { GitError } from './exec.js';
 export { InputError } from './errors.js';
 export { assertRepoPath, resolveInRepo } from './paths.js';

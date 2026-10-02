@@ -8,13 +8,15 @@ import { ThreadCard } from './thread-card';
 
 interface OrphanedThreadsProps {
   threads: CommentThreadType[];
+  /** Threads on the whole file (line 0), listed the same way but not outdated. */
+  wholeFile?: boolean;
   onEditComment: (commentId: string, body: string) => void;
   onDeleteComment: (threadId: string, commentId: string) => void;
   onDeleteThread: (threadId: string) => void;
 }
 
 export function OrphanedThreads(props: OrphanedThreadsProps) {
-  const { threads, onEditComment, onDeleteComment, onDeleteThread } = props;
+  const { threads, wholeFile, onEditComment, onDeleteComment, onDeleteThread } = props;
   const [isExpanded, setIsExpanded] = useState(() => threads.some(thread => !isThreadResolved(thread)));
 
   useEffect(() => {
@@ -36,16 +38,18 @@ export function OrphanedThreads(props: OrphanedThreadsProps) {
         <ChevronIcon expanded={isExpanded} />
         <CommentIcon className="w-3.5 h-3.5" />
         <span>
-          {threads.length} outdated comment{threads.length !== 1 ? 's' : ''}
+          {threads.length} {wholeFile ? 'file' : 'outdated'} comment{threads.length !== 1 ? 's' : ''}
         </span>
-        <ThreadBadge variant="outdated" />
+        {!wholeFile && <ThreadBadge variant="outdated" />}
       </button>
       {isExpanded && (
         <div className="px-4 pb-3 space-y-2">
           {threads.map((thread) => {
-            const lineLabel = thread.startLine === thread.endLine
-              ? `Line ${thread.startLine}`
-              : `Lines ${thread.startLine}–${thread.endLine}`;
+            const lineLabel = wholeFile
+              ? 'File'
+              : thread.startLine === thread.endLine
+                ? `Line ${thread.startLine}`
+                : `Lines ${thread.startLine}–${thread.endLine}`;
 
             return (
               <ThreadCard
@@ -58,7 +62,7 @@ export function OrphanedThreads(props: OrphanedThreadsProps) {
                 headerLeft={
                   <>
                     <span className="text-[11px] text-text-muted font-mono">{lineLabel}</span>
-                    <ThreadBadge variant="outdated" />
+                    {!wholeFile && <ThreadBadge variant="outdated" />}
                     {(thread.status === 'resolved' || thread.status === 'dismissed') && (
                       <ThreadBadge variant={thread.status} />
                     )}

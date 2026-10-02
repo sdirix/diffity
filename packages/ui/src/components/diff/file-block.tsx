@@ -148,7 +148,7 @@ export function FileBlock(props: FileBlockProps) {
     return allThreads.filter(t => t.filePath === filePath && t.filePath !== GENERAL_THREAD_FILE_PATH);
   }, [allThreads, filePath]);
 
-  const { anchoredThreads: fileThreads, orphanedThreads } = useMemo(() => {
+  const { anchoredThreads: fileThreads, orphanedThreads, wholeFileThreads } = useMemo(() => {
     const diffLineNumbers = new Set<string>();
     const addLines = (lines: DiffLineType[]) => {
       for (const line of lines) {
@@ -167,7 +167,12 @@ export function FileBlock(props: FileBlockProps) {
 
     const anchored: typeof allFileThreads = [];
     const orphaned: typeof allFileThreads = [];
+    const wholeFile: typeof allFileThreads = [];
     for (const thread of allFileThreads) {
+      if (thread.startLine === 0) {
+        wholeFile.push(thread);
+        continue;
+      }
       let isInDiff = false;
       for (let line = thread.startLine; line <= thread.endLine; line++) {
         if (diffLineNumbers.has(`${thread.side}:${line}`)) {
@@ -183,7 +188,7 @@ export function FileBlock(props: FileBlockProps) {
       }
     }
 
-    return { anchoredThreads: anchored, orphanedThreads: orphaned };
+    return { anchoredThreads: anchored, orphanedThreads: orphaned, wholeFileThreads: wholeFile };
   }, [allFileThreads, file.hunks, allExpandedLines]);
 
   const handleSelectionComplete = useCallback((selection: LineSelection) => {
@@ -436,10 +441,10 @@ export function FileBlock(props: FileBlockProps) {
         {file.status !== 'modified' && <StatusBadge status={file.status} />}
         {file.isBinary && <Badge className="bg-bg-tertiary text-text-muted">Binary</Badge>}
         <div className="ml-auto flex items-center gap-2.5 shrink-0">
-          {(fileThreads.length + orphanedThreads.length) > 0 && (
+          {allFileThreads.length > 0 && (
             <span className="text-[11px] text-text-muted flex items-center gap-1">
               <CommentIcon className="w-3 h-3" />
-              {fileThreads.length + orphanedThreads.length}
+              {allFileThreads.length}
               {orphanedThreads.length > 0 && (
                 <ThreadBadge variant="outdated" size="sm">
                   {orphanedThreads.length} outdated
@@ -486,6 +491,13 @@ export function FileBlock(props: FileBlockProps) {
       </div>
       {!collapsed && (
         <div>
+          <OrphanedThreads
+            threads={wholeFileThreads}
+            wholeFile
+            onEditComment={editComment}
+            onDeleteComment={deleteComment}
+            onDeleteThread={deleteThread}
+          />
           {file.isBinary ? (
             <div className="p-4 text-center text-text-muted italic">Binary file not shown</div>
           ) : file.hunks.length === 0 ? (

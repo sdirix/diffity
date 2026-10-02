@@ -17,6 +17,20 @@ export function getMergeBase(a: string, b: string): string | null {
   return gitTry(['merge-base', '--end-of-options', a, b])?.trim() || null;
 }
 
+/** Whether `ancestor` is `descendant` itself or in its history. */
+export function isAncestor(ancestor: string, descendant: string): boolean {
+  return gitTry(['merge-base', '--is-ancestor', '--end-of-options', ancestor, descendant]) !== null;
+}
+
+/**
+ * The commits a branch has pointed to, newest first, as far as its reflog
+ * goes. This includes commits that were amended or rebased away.
+ */
+export function getBranchReflog(branch: string): string[] {
+  const out = gitTry(['log', '--walk-reflogs', '--format=%H', '--end-of-options', `refs/heads/${branch}`, '--']);
+  return out?.split('\n').filter(Boolean) ?? [];
+}
+
 /** The commit HEAD points to, or `null` in a repository without commits. */
 export function getHeadHash(): string | null {
   return verifyCommit('HEAD');
