@@ -14,6 +14,8 @@ export interface Settings {
   editor: string;
   /** Program and arguments with `{file}`, `{line}` and `{column}`, split like a shell does but run without one. */
   editorCommand: string;
+  /** Whether a comment that mentions `@claude` or `@agent` sends its thread to the agent. */
+  agentMentions: boolean;
 }
 
 interface Field<T> {
@@ -45,6 +47,7 @@ const SCHEMA: { [K in keyof Settings]: Field<Settings[K]> } = {
   hideWhitespace: flag(false),
   editor: oneOf(['auto', 'custom', ...EDITOR_IDS], 'auto'),
   editorCommand: commandLine(),
+  agentMentions: flag(true),
 };
 
 export function settingsPath(): string {

@@ -24,6 +24,7 @@ import { registerDoctorCommand } from './commands/doctor.js';
 import { registerTreeCommand } from './commands/tree.js';
 import { registerKillCommand } from './commands/kill.js';
 import { registerConfigCommand } from './commands/config.js';
+import { registerMcpCommand } from './commands/mcp.js';
 import { SKILLS_HASH } from './generated/skills-hash.js';
 import { openTarget } from './target.js';
 import { TREE_REF } from './session.js';
@@ -368,5 +369,6 @@ registerTreeCommand(program, pkg.version);
 registerKillCommand(program);
 registerConfigCommand(program);
 registerAgentCommands(program);
+registerMcpCommand(program, pkg.version);
 
 program.parse();

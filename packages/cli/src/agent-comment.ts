@@ -17,13 +17,38 @@ export interface CommentTarget {
   anchorContent?: string;
 }
 
-/** A comment that cannot be placed, with hints for a retry. `file` when the file itself is not in the diff. */
-export class CommentTargetError extends Error {
-  constructor(message: string, readonly hints: string[] = [], readonly kind: 'file' | 'lines' = 'lines') {
+/** A failed agent action, with hints for a retry. */
+export class AgentError extends Error {
+  constructor(message: string, readonly hints: string[] = []) {
     super(message);
+    this.name = 'AgentError';
+  }
+}
+
+/** A comment that cannot be placed, with hints for a retry. `file` when the file itself is not in the diff. */
+export class CommentTargetError extends AgentError {
+  constructor(message: string, hints: string[] = [], readonly kind: 'file' | 'lines' = 'lines') {
+    super(message, hints);
     this.name = 'CommentTargetError';
   }
 }
+
+/** How messages name the options of a comment. */
+export interface OptionNames {
+  file: string;
+  line: string;
+  endLine: string;
+  side: string;
+  severity: string;
+}
+
+export const CLI_OPTIONS: OptionNames = {
+  file: '--file',
+  line: '--line',
+  endLine: '--end-line',
+  side: '--side',
+  severity: '--severity',
+};
 
 /** The tree view's file comments live on this prefix plus the path, at line 0. */
 export const PATH_THREAD_PREFIX = '__path__:';
@@ -41,7 +66,7 @@ export function parseSeverity(raw: string): Severity | null {
 }
 
 /** Prefixes `body` with the `[severity]` tag the review skills write by hand. */
-export function withSeverity(body: string, severity: Severity | undefined): string {
+export function withSeverity(body: string, severity: Severity | undefined, names: OptionNames = CLI_OPTIONS): string {
   if (!severity) {
     return body;
   }
@@ -50,7 +75,7 @@ export function withSeverity(body: string, severity: Severity | undefined): stri
     return `[${severity}] ${body.trimStart()}`;
   }
   if (tagged[1].toLowerCase() !== severity) {
-    throw new CommentTargetError(`The body starts with [${tagged[1]}], which contradicts --severity ${severity}`);
+    throw new CommentTargetError(`The body starts with [${tagged[1]}], which contradicts ${names.severity} ${severity}`);
   }
   return body;
 }
@@ -93,7 +118,12 @@ function anchorText(hunk: DiffHunk, side: Side, start: number, end: number): str
  * Places a comment in the diff of `ref`. Line 0 makes a comment on the whole
  * file, other lines have to lie within one hunk on the requested side.
  */
-export function resolveDiffTarget(diff: ParsedDiff, ref: string, request: CommentRequest): CommentTarget {
+export function resolveDiffTarget(
+  diff: ParsedDiff,
+  ref: string,
+  request: CommentRequest,
+  names: OptionNames = CLI_OPTIONS,
+): CommentTarget {
   const { path, side, startLine, endLine } = request;
   const file = diff.files.find((f) => diffFilePath(f) === path || f.newPath === path || f.oldPath === path);
   if (!file) {
@@ -109,7 +139,7 @@ export function resolveDiffTarget(diff: ParsedDiff, ref: string, request: Commen
     return { filePath, side, startLine: 0, endLine: 0 };
   }
 
-  const fileHint = 'Use --line 0 to comment on the whole file.';
+  const fileHint = `Use ${names.line} 0 to comment on the whole file.`;
   const ranges = file.hunks.flatMap((hunk) => {
     const range = hunkRange(hunk, side);
     return range ? [{ hunk, range }] : [];
@@ -117,7 +147,7 @@ export function resolveDiffTarget(diff: ParsedDiff, ref: string, request: Commen
   if (ranges.length === 0) {
     const other = side === 'old' ? 'new' : 'old';
     const why = file.isBinary ? 'is a binary file' : `has no ${side} side lines in this diff`;
-    throw new CommentTargetError(`"${filePath}" ${why}.`, file.isBinary ? [fileHint] : [`Use --side ${other} or --line 0.`]);
+    throw new CommentTargetError(`"${filePath}" ${why}.`, file.isBinary ? [fileHint] : [`Use ${names.side} ${other} or ${names.line} 0.`]);
   }
 
   const match = ranges.find(({ range: [lo, hi] }) => startLine >= lo && endLine <= hi);
@@ -138,7 +168,7 @@ export function resolveDiffTarget(diff: ParsedDiff, ref: string, request: Commen
  * Places a comment in the file browser on a file that reads `content`.
  * Line 0 makes a comment on the whole file.
  */
-export function resolveTreeTarget(content: string, request: CommentRequest): CommentTarget {
+export function resolveTreeTarget(content: string, request: CommentRequest, names: OptionNames = CLI_OPTIONS): CommentTarget {
   const { path, startLine, endLine } = request;
   if (startLine === 0) {
     return { filePath: `${PATH_THREAD_PREFIX}${path}`, side: 'new', startLine: 0, endLine: 0 };
@@ -148,7 +178,7 @@ export function resolveTreeTarget(content: string, request: CommentRequest): Com
   if (endLine > lineCount) {
     throw new CommentTargetError(
       `${describeLines(startLine, endLine)} outside "${path}", which has ${lineCount} line(s).`,
-      ['Use --line 0 to comment on the whole file.'],
+      [`Use ${names.line} 0 to comment on the whole file.`],
     );
   }
   return {

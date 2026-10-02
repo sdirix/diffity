@@ -8,11 +8,13 @@ import {
   deleteAllThreadsForSession,
   editComment,
   deleteComment,
+  getComment,
   type ThreadAuthor,
   type ThreadStatus,
 } from './threads.js';
 import { getCurrentSession } from './session.js';
 import { sendJson, sendError, withJsonBody } from './http-utils.js';
+import { requestOnMention } from './agent-mentions.js';
 
 export function handleReviewRoute(req: IncomingMessage, res: ServerResponse, pathname: string, url: URL): boolean {
   if (pathname === '/api/sessions/current' && req.method === 'GET') {
@@ -58,6 +60,7 @@ export function handleReviewRoute(req: IncomingMessage, res: ServerResponse, pat
         commentBody as string, author as ThreadAuthor,
         anchorContent as string | undefined,
       );
+      requestOnMention({ threadId: thread.id, body: thread.comments[0].body, author: thread.comments[0].author });
       sendJson(res, thread);
     });
     return true;
@@ -72,6 +75,7 @@ export function handleReviewRoute(req: IncomingMessage, res: ServerResponse, pat
         return;
       }
       const comment = addReply(threadReplyMatch[1], commentBody as string, author as ThreadAuthor);
+      requestOnMention({ threadId: threadReplyMatch[1], body: comment.body, author: comment.author });
       sendJson(res, comment);
     });
     return true;
@@ -111,7 +115,11 @@ export function handleReviewRoute(req: IncomingMessage, res: ServerResponse, pat
         sendError(res, 400, 'Missing body');
         return;
       }
+      const before = getComment(commentEditMatch[1]);
       editComment(commentEditMatch[1], commentBody as string);
+      if (before) {
+        requestOnMention({ threadId: before.threadId, body: commentBody as string, author: before.author, previousBody: before.body });
+      }
       sendJson(res, { ok: true });
     });
     return true;

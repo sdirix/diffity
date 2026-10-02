@@ -4,6 +4,7 @@ export const SECTION_LABELS: Record<SettingsSection, string> = {
   appearance: 'Appearance',
   diff: 'Diff',
   editor: 'Editor',
+  agent: 'Agent',
   data: 'Data',
 };
 
@@ -24,6 +25,7 @@ export const SETTINGS_ITEMS: SettingsItem[] = [
   { id: 'hidden-files', label: 'Hidden files', section: 'diff', keywords: 'diffityignore ignore generated exclude patterns' },
   { id: 'editor', label: 'Open files with', section: 'editor', keywords: 'vs code vscode cursor zed sublime intellij idea automatic detect' },
   { id: 'editor-command', label: 'Custom editor command', section: 'editor', keywords: 'program arguments file line column placeholder diffity config cli' },
+  { id: 'agent-mentions', label: 'Ask the agent with @mentions', section: 'agent', keywords: '@claude @agent mention comment reply queue request' },
   { id: 'clear-data', label: 'Clear comments and viewed files', section: 'data', keywords: 'delete reset remove threads reviewed storage' },
 ];
 

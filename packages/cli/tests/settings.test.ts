@@ -35,6 +35,7 @@ describe('settings', () => {
       hideWhitespace: false,
       editor: 'auto',
       editorCommand: '',
+      agentMentions: true,
     };
     expect(readSettings()).toEqual(defaults);
     writeFile('{broken');

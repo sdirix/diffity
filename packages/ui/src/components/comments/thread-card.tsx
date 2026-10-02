@@ -5,6 +5,7 @@ import { CommentBubble } from './comment-bubble';
 import { CommentForm } from './comment-form';
 import { TrashIcon } from '../icons/trash-icon';
 import { GitHubIcon } from '../icons/github-icon';
+import { AgentThreadActivity, AgentThreadAsk } from '../agent/thread-actions';
 import { cn } from '../../lib/cn';
 import { postCommentWithToast } from '../../lib/github-threads';
 
@@ -47,6 +48,7 @@ export function ThreadCard(props: ThreadCardProps) {
           {thread.githubThreadId && <GitHubIcon className="w-3 h-3 text-text-muted" aria-label="On GitHub" />}
         </div>
         <div className="flex items-center gap-1">
+          <AgentThreadAsk thread={thread} canReply={!!onReply} />
           {onResolve && onUnresolve && (
             resolved ? (
               <button
@@ -86,6 +88,7 @@ export function ThreadCard(props: ThreadCardProps) {
           />
         ))}
       </div>
+      <AgentThreadActivity threadId={thread.id} />
       {onReply && (
         showReply ? (
           <div className="px-3 pb-2">

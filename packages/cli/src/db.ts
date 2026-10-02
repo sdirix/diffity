@@ -183,6 +183,34 @@ const MIGRATIONS: ((db: DatabaseSync) => void)[] = [
     ALTER TABLE comments ADD COLUMN github_comment_id INTEGER;
     CREATE INDEX idx_threads_github ON comment_threads(github_thread_id);
   `),
+  // Requests from the browser to the user's own agent, which `diffity agent wait` hands out oldest first.
+  // `payload` holds the JSON of the threads, note, focus and paths. `agent_listeners` are the waits running
+  // now, each refreshing `seen_at` while it blocks, so the browser can tell whether an agent listens.
+  (db) => db.exec(`
+    CREATE TABLE agent_requests (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL REFERENCES review_sessions(id) ON DELETE CASCADE,
+      ref TEXT NOT NULL,
+      mode TEXT NOT NULL,
+      trigger TEXT NOT NULL DEFAULT 'user',
+      payload TEXT NOT NULL DEFAULT '{}',
+      status TEXT NOT NULL DEFAULT 'queued',
+      progress TEXT,
+      result TEXT,
+      created_at TEXT NOT NULL,
+      claimed_at TEXT,
+      progress_at TEXT,
+      done_at TEXT
+    );
+    CREATE INDEX idx_agent_requests_status ON agent_requests(status, created_at);
+
+    CREATE TABLE agent_listeners (
+      id TEXT PRIMARY KEY,
+      pid INTEGER NOT NULL,
+      started_at TEXT NOT NULL,
+      seen_at TEXT NOT NULL
+    );
+  `),
 ];
 
 function userVersion(db: DatabaseSync): number {

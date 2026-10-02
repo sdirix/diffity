@@ -1,43 +1,38 @@
-import { existsSync, statSync } from 'node:fs';
-import { join, isAbsolute } from 'node:path';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import { InvalidArgumentError, type Command } from 'commander';
 import pc from 'picocolors';
-import { parseDiff } from '@diffity/parser';
+import { getRepoRoot } from '@diffity/git';
 import {
-  isGitRepo,
-  isValidGitRef,
-  getRefDiff,
-  resolveRef,
-  getRepoRoot,
-  getWorkingTreeFileContent,
-  WORKING_TREE_REFS,
-} from '@diffity/git';
-import {
+  AgentError,
   CommentTargetError,
   PATH_THREAD_PREFIX,
   SEVERITIES,
   parseSeverity,
-  resolveDiffTarget,
-  resolveTreeTarget,
-  withSeverity,
-  type CommentTarget,
   type Severity,
 } from './agent-comment.js';
-import { findOrCreateSession, getCurrentSession, getSessionById, TREE_REF, type Session } from './session.js';
 import {
-  createThread,
+  AGENT_AUTHOR,
+  addAgentComment,
+  addGeneralComment,
+  assertRepo,
+  assertRepoFile,
+  closeThread,
+  getSessionDiff,
+  resolveSession,
+  type SessionOptions,
+} from './agent-actions.js';
+import { TREE_REF, type Session } from './session.js';
+import {
   getThreadsForSession,
   findThread,
   addReply,
-  updateThreadStatus,
   type ThreadStatus,
   type Thread,
 } from './threads.js';
+import { GENERAL_THREAD_PATH } from './thread-location.js';
 import { createTour, addTourStep, updateTourStatus } from './tours.js';
-
-interface SessionOptions {
-  ref?: string;
-}
+import { registerAgentRequestCommands } from './agent-request-commands.js';
 
 function fail(message: string, hint?: string): never {
   console.error(pc.red(`Error: ${message}`));
@@ -47,50 +42,44 @@ function fail(message: string, hint?: string): never {
   process.exit(1);
 }
 
+const SHELL_TIP = [
+  '  Tip: consecutive dots suggest a shell variable expanded to empty.',
+  '  If your path contains "$" (e.g. "teams.$teamId.tsx"), single-quote the --file value',
+  "  or escape it: --file 'apps/routes/teams.$teamId.tsx'",
+];
+
+/** Exits with the message and hints of `err`, plus a quoting tip when `path` is not found. */
+function failWith(err: unknown, path?: string): never {
+  if (!(err instanceof AgentError)) {
+    fail(err instanceof Error ? err.message : String(err));
+  }
+  const mistyped = err instanceof CommentTargetError && err.kind === 'file' && path?.includes('..')
+    && !existsSync(join(getRepoRoot(), path));
+  const hints = mistyped ? [...err.hints, ...SHELL_TIP] : err.hints;
+  fail(err.message, hints.join('\n') || undefined);
+}
+
 function requireRepo(): void {
-  if (!isGitRepo()) {
-    fail('Not a git repository');
+  try {
+    assertRepo();
+  } catch (err) {
+    failWith(err);
   }
 }
 
-/** The session named by `--ref`, else by `DIFFITY_SESSION_ID`, else the one of the view opened last. */
 function requireSession(opts: SessionOptions): Session {
-  requireRepo();
-
-  if (opts.ref !== undefined) {
-    const ref = opts.ref === '.' ? 'work' : opts.ref;
-    if (ref !== TREE_REF && !WORKING_TREE_REFS.has(ref) && !isValidGitRef(ref)) {
-      fail(`'${ref}' is not a valid git reference.`);
-    }
-    return findOrCreateSession(ref);
+  try {
+    return resolveSession(opts);
+  } catch (err) {
+    failWith(err);
   }
-
-  const envId = process.env.DIFFITY_SESSION_ID?.trim();
-  if (envId) {
-    return getSessionById(envId) ?? fail(`No session with id ${envId} (from DIFFITY_SESSION_ID).`);
-  }
-
-  return getCurrentSession() ?? fail(
-    'No active review session.',
-    'Start diffity first to create a session, or pass --ref <ref>.',
-  );
 }
 
 function assertFileExists(filePath: string): void {
-  if (isAbsolute(filePath)) {
-    console.error(pc.red(`Error: --file must be relative to the repo root, got absolute path: ${filePath}`));
-    process.exit(1);
-  }
-  const abs = join(getRepoRoot(), filePath);
-  if (!existsSync(abs) || !statSync(abs).isFile()) {
-    console.error(pc.red(`Error: File not found at repo root: ${filePath}`));
-    console.error(pc.dim(`  Checked: ${abs}`));
-    if (filePath.includes('..')) {
-      console.error(pc.dim(`  Tip: consecutive dots suggest a shell variable expanded to empty.`));
-      console.error(pc.dim(`  If your path contains "$" (e.g. "teams.$teamId.tsx"), single-quote the --file value`));
-      console.error(pc.dim(`  or escape it: --file 'apps/routes/teams.$teamId.tsx'`));
-    }
-    process.exit(1);
+  try {
+    assertRepoFile(filePath);
+  } catch (err) {
+    failWith(err, filePath);
   }
 }
 
@@ -109,13 +98,6 @@ function parseSeverityOption(value: string): Severity {
   return severity;
 }
 
-function failTarget(err: unknown): never {
-  if (err instanceof CommentTargetError) {
-    fail(err.message, err.hints.join('\n') || undefined);
-  }
-  fail(err instanceof Error ? err.message : String(err));
-}
-
 function resolveThreadId(shortId: string, sessionId: string): Thread {
   try {
     return findThread(sessionId, shortId);
@@ -126,7 +108,7 @@ function resolveThreadId(shortId: string, sessionId: string): Thread {
 
 function formatThreadLine(thread: Thread): string {
   const shortId = thread.id.slice(0, 8);
-  const isGeneral = thread.filePath === '__general__';
+  const isGeneral = thread.filePath === GENERAL_THREAD_PATH;
   const statusColor = thread.status === 'open' ? pc.yellow : thread.status === 'resolved' ? pc.green : thread.status === 'dismissed' ? pc.dim : pc.cyan;
   const statusLabel = statusColor(`[${thread.status}]`);
   const firstComment = thread.comments[0]?.body || '';
@@ -171,7 +153,10 @@ Examples:
   $ diffity agent general-comment --body "Overall this looks good, just a few nits"
   $ diffity agent tour-start --topic "How does auth work?" --body "Overview of the auth flow"
   $ diffity agent tour-step --tour <id> --file src/auth.ts --line 10 --body "Entry point"
-  $ diffity agent tour-done --tour <id>`);
+  $ diffity agent tour-done --tour <id>
+  $ diffity agent wait --json
+  $ diffity agent progress <request-id> "Reviewing src/app.ts"
+  $ diffity agent done <request-id> --summary "2 must-fix, 1 nit"`);
 
   agent
     .command('list')
@@ -226,54 +211,14 @@ Examples:
         fail('Missing --line <n>, use 0 for the whole file');
       }
       const endLine: number = opts.endLine ?? startLine;
-      if (startLine === 0 && endLine !== 0) {
-        fail('A comment on the whole file (--line 0) takes no --end-line');
-      }
-      if (endLine < startLine) {
-        fail(`--end-line ${endLine} is before --line ${startLine}`);
-      }
-      let body: string;
-      try {
-        body = withSeverity(opts.body, opts.severity);
-      } catch (err) {
-        failTarget(err);
-      }
-
       const session = requireSession(opts);
-      const request = { path: String(opts.file).replace(/^\.\//, ''), side: opts.side, startLine, endLine };
-      let target: CommentTarget;
-      if (session.ref === TREE_REF) {
-        assertFileExists(request.path);
-        if (request.side === 'old') {
-          fail('The file browser has no old side, use --side new');
-        }
-        try {
-          target = resolveTreeTarget(getWorkingTreeFileContent(request.path), request);
-        } catch (err) {
-          failTarget(err);
-        }
-      } else {
-        try {
-          target = resolveDiffTarget(parseDiff(resolveRef(session.ref, [], { showHidden: true })), session.ref, request);
-        } catch (err) {
-          // A path that is not on disk either is more likely mistyped than missing from the diff.
-          if (err instanceof CommentTargetError && err.kind === 'file' && !existsSync(join(getRepoRoot(), request.path))) {
-            assertFileExists(request.path);
-          }
-          failTarget(err);
-        }
+      const path = String(opts.file);
+      let thread: Thread;
+      try {
+        thread = addAgentComment(session, { path, side: opts.side, startLine, endLine, body: opts.body, severity: opts.severity });
+      } catch (err) {
+        failWith(err, path);
       }
-
-      const thread = createThread(
-        session.id,
-        target.filePath,
-        target.side,
-        target.startLine,
-        target.endLine,
-        body,
-        { name: 'Agent', type: 'agent' },
-        target.anchorContent,
-      );
       console.log(pc.green(`Created thread ${thread.id.slice(0, 8)}`));
     });
 
@@ -286,8 +231,7 @@ Examples:
     .action((id: string, opts) => {
       const session = requireSession(opts);
       const thread = resolveThreadId(id, session.id);
-      const author = opts.summary ? { name: 'Agent', type: 'agent' as const } : undefined;
-      updateThreadStatus(thread.id, 'resolved', opts.summary, author);
+      closeThread(thread, 'resolved', opts.summary);
       console.log(pc.green(`Resolved thread ${thread.id.slice(0, 8)}`));
     });
 
@@ -300,8 +244,7 @@ Examples:
     .action((id: string, opts) => {
       const session = requireSession(opts);
       const thread = resolveThreadId(id, session.id);
-      const author = opts.reason ? { name: 'Agent', type: 'agent' as const } : undefined;
-      updateThreadStatus(thread.id, 'dismissed', opts.reason, author);
+      closeThread(thread, 'dismissed', opts.reason);
       console.log(pc.green(`Dismissed thread ${thread.id.slice(0, 8)}`));
     });
 
@@ -314,7 +257,7 @@ Examples:
     .action((id: string, opts) => {
       const session = requireSession(opts);
       const thread = resolveThreadId(id, session.id);
-      addReply(thread.id, opts.body, { name: 'Agent', type: 'agent' });
+      addReply(thread.id, opts.body, AGENT_AUTHOR);
       console.log(pc.green(`Replied to thread ${thread.id.slice(0, 8)}`));
     });
 
@@ -325,15 +268,7 @@ Examples:
     .option(REF_FLAGS, REF_HELP)
     .action((opts) => {
       const session = requireSession(opts);
-      const thread = createThread(
-        session.id,
-        '__general__',
-        'new',
-        0,
-        0,
-        opts.body,
-        { name: 'Agent', type: 'agent' },
-      );
+      const thread = addGeneralComment(session, opts.body);
       console.log(pc.green(`Created general comment ${thread.id.slice(0, 8)}`));
     });
 
@@ -343,8 +278,7 @@ Examples:
     .option(REF_FLAGS, REF_HELP)
     .action((opts) => {
       const session = requireSession(opts);
-      const ref = session.ref === '__tree__' ? 'work' : session.ref;
-      const { patch, hiddenFiles } = getRefDiff(ref);
+      const { patch, hiddenFiles } = getSessionDiff(session);
       if (hiddenFiles.length > 0) {
         console.error(pc.dim(`${hiddenFiles.length} file${hiddenFiles.length === 1 ? '' : 's'} hidden by .diffityignore`));
       }
@@ -408,4 +342,6 @@ Examples:
       }
       console.log(pc.green('Tour marked as ready'));
     });
+
+  registerAgentRequestCommands(agent);
 }

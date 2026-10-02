@@ -17,6 +17,7 @@ import { syncRemoteThreads } from './github-sync.js';
 import { postReview, reviewCandidates, ReviewError, type ReviewRequest } from './github-review.js';
 import { bodyForGitHub, findComment, githubThreadOf, recordGitHubReply, recordGitHubStatus, setCommentGitHubId } from './github-threads.js';
 import { readJsonObject, sendError, sendJson } from './http-utils.js';
+import { requestOnMention } from './agent-mentions.js';
 import type { ThreadAuthor } from './threads.js';
 
 const PR_CACHE_MS = 15_000;
@@ -171,7 +172,9 @@ export async function handleGitHubRoute(
     const author = isAuthor(body.author) ? body.author : YOU;
     try {
       const id = replyToThread(githubThreadId, bodyForGitHub(body.body, author.name, author.type));
-      sendJson(res, recordGitHubReply(replyMatch[1], body.body, author, id));
+      const comment = recordGitHubReply(replyMatch[1], body.body, author, id);
+      requestOnMention({ threadId: replyMatch[1], body: comment.body, author });
+      sendJson(res, comment);
     } catch (err) {
       sendFailure(res, err);
     }

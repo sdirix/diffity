@@ -85,6 +85,7 @@ describe('parseSettings', () => {
       hideWhitespace: true,
       editor: 'custom',
       editorCommand: 'subl {file}:{line}',
+      agentMentions: false,
     };
     expect(parseSettings(settings)).toEqual(settings);
   });

@@ -133,6 +133,48 @@ Without a ref it resolves the diff your agent reviewed or opened in the conversa
 
 A typical workflow: run `/diffity-review` to get AI feedback, check the comments in the browser, then run `/diffity-resolve` to apply the fixes.
 
+### `/diffity-watch`
+
+Hands requests from the browser to the agent session you already run, instead of starting another agent. The agent waits in the background and handles each request with the context it has:
+
+```
+/diffity-watch
+```
+
+1. The agent runs `diffity agent wait --json` as a background command. The toolbar shows **Agent** with a green dot.
+2. In the browser, **Review** asks for a review with an optional focus, **Send N** picks comments to resolve with a note, **Ask Agent** asks about one thread, and a comment that mentions `@claude` or `@agent` does the same. Each queues a request.
+3. `wait` claims the oldest request and exits with instructions: the view, the `diffity agent` commands to use and the skill to follow. Its exit wakes the agent.
+4. The agent does the work, reports with `diffity agent progress`, closes the request with `diffity agent done` and waits again.
+
+Requests queue while no agent listens, and the toolbar says how to start one. `a` lists the requests with their progress and cancels queued ones. A wait gives up after 50 minutes with exit code 75, as Claude Code stops background commands after two hours, and the agent starts the next one. Say stop to end it. Settings, Agent turns the mentions off.
+
+### MCP server
+
+`diffity mcp` serves the review actions as MCP tools over stdio: `get_diff`, `list_threads`, `add_comment`, `add_general_comment`, `reply`, `resolve` and `dismiss`. Comments show up in the open diff view right away.
+
+Register it with Claude Code, for one project or with `--scope user` for all of them:
+
+```bash
+claude mcp add diffity -- diffity mcp
+claude mcp add --scope user diffity -- diffity mcp
+```
+
+Other MCP clients take the same command in their server config:
+
+```json
+{
+  "mcpServers": {
+    "diffity": { "command": "diffity", "args": ["mcp"] }
+  }
+}
+```
+
+The server works on the repo of the directory the client starts it in. Each tool call uses the session of `--ref <ref>` when given, else the one of `DIFFITY_SESSION_ID`, else the diff view opened last, like `diffity agent`:
+
+```bash
+claude mcp add diffity-main -- diffity mcp --ref main
+```
+
 ## Browse project files
 
 Run `diffity tree` to open a full file tree browser — no diff required. Browse your repo, read files with syntax highlighting, and leave comments on any file or folder.
@@ -263,6 +305,7 @@ diffity list --json        # machine-readable output
 - **Viewed files.** `r` marks a file viewed and collapses it. A viewed file that changes again gets a badge, and one click shows only what changed since.
 - **Hide generated files.** Files matched by `.diffityignore`, or by the patterns under Settings, stay out of diffs. The toolbar counts them and shows them on demand.
 - **Comments panel.** `c` lists the comments of this view or of all views, filtered by status and author.
+- **Agent requests.** `Shift+A` asks your agent for a review, `Shift+C` sends it comments, `a` shows what it works on. See [`/diffity-watch`](#diffity-watch).
 - **File comments.** Comment on a whole file from its header, next to line and general comments.
 - **Colour-blind colours.** Blue and orange instead of green and red, in light and dark.
 - **Settings.** `Ctrl+,` sets the theme, diff colours, default layout, whitespace, hidden files and the editor that opens files. Hidden files are per repo, the rest is shared by every repo. A custom editor command is only set from the CLI, with `diffity config editor "subl {file}:{line}:{column}"`.

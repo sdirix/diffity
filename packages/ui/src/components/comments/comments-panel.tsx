@@ -28,6 +28,7 @@ import { statusOptions } from '../../queries/refs';
 import { useNavigateToRef } from '../layout/ref-menu';
 import { formatRelativeTime } from './comment-bubble';
 import { GENERAL_THREAD_FILE_PATH } from './types';
+import { AgentPanelSend } from '../agent/agent-send';
 import { ConfirmDialog } from '../ui/confirm-dialog';
 import { SegmentedToggle } from '../ui/segmented-toggle';
 import { ThreadBadge } from '../ui/thread-badge';
@@ -401,6 +402,7 @@ export function CommentsPanel(props: CommentsPanelProps) {
             </section>
           ))}
       </div>
+      <AgentPanelSend />
       <div className="flex items-center gap-1.5 px-3 py-1.5 border-t border-border text-[11px] text-text-muted">
         <Kbd>{shortcutHint('comments-panel')}</Kbd>
         toggles this panel

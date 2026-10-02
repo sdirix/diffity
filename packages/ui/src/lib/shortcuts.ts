@@ -57,6 +57,15 @@ export const SHORTCUT_SECTIONS: ShortcutSection[] = [
     ],
   },
   {
+    title: 'Agent',
+    shortcuts: [
+      { id: 'agent-review', label: 'Review with the agent', keys: ['Shift+a'] },
+      { id: 'agent-send', label: 'Send comments to the agent', keys: ['Shift+c'] },
+      { id: 'agent-requests', label: 'Show or hide agent requests', keys: ['a'] },
+      { label: 'Ask the agent in a comment', keys: ['@claude', '@agent'] },
+    ],
+  },
+  {
     title: 'Find',
     shortcuts: [
       { id: 'find', label: 'Find in diff', keys: [chord('F')] },

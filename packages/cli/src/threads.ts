@@ -310,6 +310,12 @@ export function deleteAllThreadsForSession(sessionId: string): void {
   db.prepare('DELETE FROM comment_threads WHERE session_id = ?').run(sessionId);
 }
 
+/** The thread, author and body of comment `commentId`, `null` when it does not exist. */
+export function getComment(commentId: string): { threadId: string; author: ThreadAuthor; body: string } | null {
+  const row = queryOne<CommentRow>('SELECT * FROM comments WHERE id = ?', commentId);
+  return row ? { threadId: row.thread_id, author: rowToComment(row).author, body: row.body } : null;
+}
+
 export function editComment(commentId: string, body: string): void {
   const db = getDb();
   db.prepare('UPDATE comments SET body = ? WHERE id = ?').run(unescapeMarkdown(body), commentId);

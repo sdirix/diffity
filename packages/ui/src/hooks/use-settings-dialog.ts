@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from 'react';
 
-export type SettingsSection = 'appearance' | 'diff' | 'editor' | 'data';
+export type SettingsSection = 'appearance' | 'diff' | 'editor' | 'agent' | 'data';
 
 interface SettingsDialogState {
   open: boolean;

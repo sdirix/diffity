@@ -7,6 +7,7 @@ import { queryClient } from "./lib/query-client";
 import { ErrorPage } from "./components/error-page";
 import { CommandPalette } from "./components/layout/command-palette";
 import { SettingsDialog } from "./components/settings/settings-dialog";
+import { AgentLayer } from "./components/agent/agent-layer";
 import { PageSkeleton } from "./components/layout/skeleton";
 import { APPLY_STORED_COLOURS } from "./lib/preferences";
 import "./lib/diff-palette";
@@ -64,6 +65,7 @@ export default function App() {
       <Outlet />
       <CommandPalette />
       <SettingsDialog />
+      <AgentLayer />
       <Toaster
         position="bottom-right"
         gap={8}

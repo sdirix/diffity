@@ -22,7 +22,11 @@ const buildOptions = {
   platform: 'node' as const,
   target: 'node22',
   format: 'esm' as const,
-  outfile: join(distDir, 'index.js'),
+  outdir: distDir,
+  // The MCP server and its SDK go to a chunk that only `diffity mcp` loads.
+  // Chunks sit next to index.js, so paths relative to `import.meta.url` hold in them.
+  splitting: true,
+  chunkNames: '[name]-[hash]',
   banner: {
     js: '#!/usr/bin/env node',
   },

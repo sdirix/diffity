@@ -49,6 +49,7 @@ import { handleViewedRoute } from './viewed-routes.js';
 import { handleSettingsRoute } from './settings-routes.js';
 import { editorCapability, handleEditorRoute } from './editor-routes.js';
 import { handleInstanceRoute } from './instance-routes.js';
+import { handleAgentRequestRoute } from './agent-request-routes.js';
 import { sendJson, sendError, readBody } from './http-utils.js';
 import { rejectRequest } from './request-guard.js';
 import {
@@ -510,6 +511,10 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
         }
 
         if (await handleEditorRoute(req, res, pathname)) {
+          return;
+        }
+
+        if (await handleAgentRequestRoute(req, res, pathname)) {
           return;
         }
 

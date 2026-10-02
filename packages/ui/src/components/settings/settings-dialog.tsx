@@ -16,6 +16,8 @@ import { GitCompareIcon } from '../icons/git-compare-icon';
 import { SearchIcon } from '../icons/search-icon';
 import { TrashIcon } from '../icons/trash-icon';
 import { XIcon } from '../icons/x-icon';
+import { SparkleIcon } from '../agent/agent-icons';
+import { AgentSettingsSection } from '../agent/agent-settings';
 import { AppearanceSection } from './appearance-section';
 import { DataSection } from './data-section';
 import { DiffSection } from './diff-section';
@@ -26,6 +28,7 @@ const SECTIONS: { id: SettingsSection; icon: ComponentType<{ className?: string 
   { id: 'appearance', icon: ContrastIcon, pane: AppearanceSection },
   { id: 'diff', icon: GitCompareIcon, pane: DiffSection },
   { id: 'editor', icon: CodeIcon, pane: EditorSection },
+  { id: 'agent', icon: SparkleIcon, pane: AgentSettingsSection },
   { id: 'data', icon: TrashIcon, pane: DataSection },
 ];
 

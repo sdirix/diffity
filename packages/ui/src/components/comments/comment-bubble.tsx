@@ -4,6 +4,7 @@ import { PencilIcon } from '../icons/pencil-icon';
 import { TrashIcon } from '../icons/trash-icon';
 import { UploadIcon } from '../icons/upload-icon';
 import { MarkdownContent } from '../layout/markdown-content';
+import { useAgentMention } from '../agent/mention-input';
 
 interface CommentBubbleProps {
   comment: Comment;
@@ -62,6 +63,7 @@ export function CommentBubble(props: CommentBubbleProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [editBody, setEditBody] = useState(comment.body);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const mention = useAgentMention(editBody, setEditBody, textareaRef);
 
   useEffect(() => {
     if (isEditing && textareaRef.current) {
@@ -86,7 +88,10 @@ export function CommentBubble(props: CommentBubbleProps) {
     setEditBody(comment.body);
   };
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (mention.onKeyDown(e)) {
+      return;
+    }
     if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
       e.preventDefault();
       handleSave();
@@ -146,13 +151,19 @@ export function CommentBubble(props: CommentBubbleProps) {
             <textarea
               ref={textareaRef}
               value={editBody}
-              onChange={(e) => setEditBody(e.target.value)}
+              onChange={(e) => {
+                setEditBody(e.target.value);
+                mention.onCaret();
+              }}
               onKeyDown={handleKeyDown}
+              onSelect={mention.onCaret}
+              onBlur={mention.onBlur}
               rows={3}
               className="w-full px-3 py-2 text-sm bg-bg-tertiary text-text resize-y outline-none rounded-md min-h-[60px]"
             />
+            {mention.popup}
             <div className="flex items-center gap-2 mt-1.5">
-              <div className="flex-1" />
+              <div className="flex-1 min-w-0">{mention.hint}</div>
               <button
                 onClick={handleCancel}
                 className="px-3 py-1 text-xs font-medium rounded-md text-text-secondary hover:bg-hover transition-colors cursor-pointer"

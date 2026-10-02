@@ -16,6 +16,7 @@ import { HiddenFilesChip } from '../diff/hidden-files-chip';
 import { GitHubDialog } from './github-dialog';
 import { SubmitReviewDialog } from './submit-review-dialog';
 import { CommentToolbarActions } from '../comments/comment-toolbar-actions';
+import { AgentToolbar } from '../agent/agent-toolbar';
 import { OptionsMenu, menuItemClass } from './options-menu';
 import { RefMenu, UncommittedToggle } from './ref-menu';
 import { ViewTabs } from './view-tabs';
@@ -231,6 +232,7 @@ export function Toolbar(props: ToolbarProps) {
         )}
       </div>
       <div className="flex items-center gap-2 ml-auto shrink-0">
+        <AgentToolbar diffRef={diffRef} hasChanges={!!diff && diff.files.length > 0} threads={threads} />
         <SegmentedToggle options={viewModeOptions} value={viewMode} onChange={onViewModeChange} />
         <CommentToolbarActions
           threads={threads}

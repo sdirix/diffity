@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
+import { useAgentMention } from '../agent/mention-input';
 
 interface CommentFormProps {
   onSubmit: (body: string) => void;
@@ -13,6 +14,7 @@ export function CommentForm(props: CommentFormProps) {
   const { onSubmit, onCancel, placeholder = 'Leave a comment', submitLabel = 'Comment', autoFocus = true, lineLabel } = props;
   const [body, setBody] = useState('');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const mention = useAgentMention(body, setBody, textareaRef);
 
   useEffect(() => {
     if (autoFocus && textareaRef.current) {
@@ -29,7 +31,10 @@ export function CommentForm(props: CommentFormProps) {
     setBody('');
   };
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (mention.onKeyDown(e)) {
+      return;
+    }
     if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
       e.preventDefault();
       handleSubmit();
@@ -52,15 +57,21 @@ export function CommentForm(props: CommentFormProps) {
         <textarea
           ref={textareaRef}
           value={body}
-          onChange={(e) => setBody(e.target.value)}
+          onChange={(e) => {
+            setBody(e.target.value);
+            mention.onCaret();
+          }}
           onKeyDown={handleKeyDown}
+          onSelect={mention.onCaret}
+          onBlur={mention.onBlur}
           placeholder={placeholder}
           rows={3}
           className="w-full px-3 py-2 text-sm bg-bg text-text resize-y outline-none placeholder:text-text-muted min-h-[80px]"
         />
+        {mention.popup}
       </div>
       <div className="flex items-center gap-2 px-1.5 pb-1.5">
-        <div className="flex-1" />
+        <div className="flex-1 min-w-0 px-1.5">{mention.hint}</div>
         <button
           onClick={onCancel}
           className="px-3 py-1.5 text-xs font-medium rounded-md text-text-secondary hover:bg-hover transition-colors cursor-pointer"

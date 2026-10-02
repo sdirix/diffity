@@ -77,6 +77,8 @@ export interface Settings {
   editor: string;
   /** The custom editor command, with `{file}`, `{line}` and `{column}`. */
   editorCommand: string;
+  /** Whether a comment that mentions `@claude` or `@agent` sends its thread to the agent. */
+  agentMentions: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -86,6 +88,7 @@ export const DEFAULT_SETTINGS: Settings = {
   hideWhitespace: false,
   editor: 'auto',
   editorCommand: '',
+  agentMentions: true,
 };
 
 function oneOf(...values: unknown[]) {
@@ -103,6 +106,7 @@ const VALID: Record<keyof Settings, (value: unknown) => boolean> = {
   hideWhitespace: oneOf(false, true),
   editor: isText,
   editorCommand: isText,
+  agentMentions: oneOf(false, true),
 };
 
 /** `value` as settings, a missing or invalid field taking its default. */
