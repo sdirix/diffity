@@ -1,48 +1,43 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { execSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
+import { getDiffFiles, getFileContent, resolveRef } from '../src/diff.js';
+import { getStagedFiles } from '../src/status.js';
+import { createRepo, type TempRepo } from './helpers.js';
 
-let repoDir: string;
+let repo: TempRepo;
 let origCwd: string;
-
-function git(cmd: string) {
-  execSync(`git ${cmd}`, { cwd: repoDir, stdio: 'pipe' });
-}
-
-function writeFile(name: string, content: string) {
-  writeFileSync(join(repoDir, name), content);
-}
 
 beforeAll(() => {
   origCwd = process.cwd();
-  repoDir = mkdtempSync(join(tmpdir(), 'diffity-format-test-'));
-
-  git('init -b main');
-  git('config user.email "test@test.com"');
-  git('config user.name "Test"');
+  repo = createRepo();
 
   // git config that alters the default diff format and previously broke parsing
-  git('config diff.mnemonicprefix true');
-  git('config color.ui always');
+  repo.git('config', 'diff.mnemonicprefix', 'true');
+  repo.git('config', 'color.ui', 'always');
+  repo.git('config', 'diff.external', 'false');
+  repo.git('config', 'diff.relative', 'true');
+  repo.git('config', 'diff.renames', 'false');
+  repo.git('config', 'diff.upper.textconv', 'tr a-z A-Z');
+  repo.git('config', 'diff.submodule', 'log');
 
-  writeFile('base.txt', 'a\nb\n');
-  git('add .');
-  git('commit -m "initial commit"');
+  repo.write('.gitattributes', '*.up diff=upper\n');
+  repo.write('base.txt', 'a\nb\n');
+  repo.write('text.up', 'lower\n');
+  repo.write('moved.txt', Array.from({ length: 20 }, (_, i) => `line ${i}\n`).join(''));
+  repo.commit('initial commit');
 
-  process.chdir(repoDir);
+  process.chdir(repo.dir);
 });
 
 afterAll(() => {
   process.chdir(origCwd);
-  rmSync(repoDir, { recursive: true, force: true });
+  repo.remove();
 });
 
 describe('diff format neutralization', () => {
-  it('emits standard a/ b/ prefixes despite diff.mnemonicprefix', async () => {
-    const { resolveRef } = await import('../src/diff.js');
-    writeFile('base.txt', 'a\nc\n');
+  it('emits standard a/ b/ prefixes despite diff.mnemonicprefix', () => {
+    repo.write('base.txt', 'a\nc\n');
 
     const raw = resolveRef('unstaged');
 
@@ -52,12 +47,11 @@ describe('diff format neutralization', () => {
     // no ANSI color escapes even with color.ui=always
     expect(raw).not.toMatch(/\x1b\[/);
 
-    git('checkout -- base.txt');
+    repo.git('checkout', '--', 'base.txt');
   });
 
-  it('emits standard prefixes for untracked files', async () => {
-    const { resolveRef } = await import('../src/diff.js');
-    writeFile('untracked.txt', 'x\ny\n');
+  it('emits standard prefixes for untracked files', () => {
+    repo.write('untracked.txt', 'x\ny\n');
 
     const raw = resolveRef('work');
 
@@ -65,6 +59,44 @@ describe('diff format neutralization', () => {
     expect(raw).toContain('+++ b/untracked.txt');
     expect(raw).not.toMatch(/\x1b\[/);
 
-    execSync(`rm "${join(repoDir, 'untracked.txt')}"`, { stdio: 'pipe' });
+    rmSync(join(repo.dir, 'untracked.txt'));
+  });
+
+  it('shows file content instead of textconv output', () => {
+    repo.write('text.up', 'still lower\n');
+
+    const raw = resolveRef('unstaged');
+
+    expect(raw).toContain('-lower');
+    expect(raw).toContain('+still lower');
+    expect(getFileContent('text.up', 'HEAD')).toBe('lower\n');
+
+    repo.git('checkout', '--', 'text.up');
+  });
+
+  it('detects renames despite diff.renames=false', () => {
+    repo.git('mv', 'moved.txt', 'renamed.txt');
+
+    const raw = resolveRef('staged');
+
+    expect(raw).toContain('rename from moved.txt');
+    expect(raw).toContain('rename to renamed.txt');
+    expect(getDiffFiles('staged')).toEqual(['renamed.txt']);
+    expect(getStagedFiles()).toEqual(['renamed.txt']);
+
+    repo.git('mv', 'renamed.txt', 'moved.txt');
+  });
+
+  it('shows a submodule change as a patch despite diff.submodule=log', () => {
+    const head = repo.git('rev-parse', 'HEAD').trim();
+    repo.git('update-index', '--add', '--cacheinfo', `160000,${head},sub`);
+
+    const raw = resolveRef('staged');
+
+    expect(raw).toContain('diff --git a/sub b/sub');
+    expect(raw).toContain(`+Subproject commit ${head}`);
+    expect(raw).not.toContain('Submodule sub');
+
+    repo.git('rm', '-q', '--cached', 'sub');
   });
 });

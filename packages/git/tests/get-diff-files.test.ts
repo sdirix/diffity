@@ -100,4 +100,16 @@ describe('getDiffFiles', () => {
     git('checkout -- base.txt');
     execSync(`rm "${join(repoDir, 'untracked-file.txt')}"`, { stdio: 'pipe' });
   });
+
+  it('includes untracked files for a single ref but not for a range', async () => {
+    const { getDiffFiles } = await import('../src/diff.js');
+    writeFile('untracked-file.txt', 'untracked\n');
+
+    expect(getDiffFiles('main')).toContain('untracked-file.txt');
+    expect(getDiffFiles('main..feature')).toEqual(expect.arrayContaining(['feature.txt', 'base.txt']));
+    expect(getDiffFiles('main..feature')).not.toContain('untracked-file.txt');
+    expect(getDiffFiles('main...feature')).not.toContain('untracked-file.txt');
+
+    execSync(`rm "${join(repoDir, 'untracked-file.txt')}"`, { stdio: 'pipe' });
+  });
 });

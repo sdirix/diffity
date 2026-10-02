@@ -16,7 +16,7 @@ function sessionFilePath(): string {
 
 export function findOrCreateSession(ref: string): Session {
   const db = getDb();
-  const headHash = getHeadHash();
+  const headHash = getHeadHash() ?? '';
 
   const existing = queryOne<{ id: string; ref: string; head_hash: string }>(
     'SELECT id, ref, head_hash FROM review_sessions WHERE ref = ? AND head_hash = ?',

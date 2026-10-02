@@ -1,27 +1,18 @@
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 
-export function exec(cmd: string): string {
-  return execSync(cmd, {
+/** Runs the GitHub CLI with an argument vector, never through a shell. */
+export function gh(args: string[], input?: string): string {
+  return execFileSync('gh', args, {
     encoding: 'utf-8',
     stdio: ['pipe', 'pipe', 'pipe'],
-  }).trim();
+    input,
+    maxBuffer: 50 * 1024 * 1024,
+  });
 }
 
-export function execJson<T>(cmd: string): T | null {
+export function ghSucceeds(args: string[]): boolean {
   try {
-    const raw = exec(cmd);
-    if (!raw) {
-      return null;
-    }
-    return JSON.parse(raw) as T;
-  } catch {
-    return null;
-  }
-}
-
-export function execSilent(cmd: string): boolean {
-  try {
-    execSync(cmd, { stdio: 'pipe' });
+    gh(args);
     return true;
   } catch {
     return false;

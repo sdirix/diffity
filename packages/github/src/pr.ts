@@ -1,12 +1,9 @@
-import { execSync } from 'node:child_process';
-import { exec } from './exec.js';
+import { gh } from './exec.js';
 import type { PrComment, PushResult, PulledThread } from './types.js';
 
 export function getFiles(owner: string, repo: string, prNumber: number): Set<string> {
   try {
-    const raw = exec(
-      `gh api repos/${owner}/${repo}/pulls/${prNumber}/files --jq '.[].filename'`,
-    );
+    const raw = gh(['api', `repos/${owner}/${repo}/pulls/${prNumber}/files`, '--paginate', '--jq', '.[].filename']);
     return new Set(raw.split('\n').filter(Boolean));
   } catch {
     return new Set();
@@ -22,10 +19,7 @@ interface ExistingComment {
 
 export function getComments(owner: string, repo: string, prNumber: number): ExistingComment[] {
   try {
-    const json = execSync(
-      `gh api repos/${owner}/${repo}/pulls/${prNumber}/comments --paginate`,
-      { encoding: 'utf-8', stdio: 'pipe', maxBuffer: 10 * 1024 * 1024 },
-    ).trim();
+    const json = gh(['api', `repos/${owner}/${repo}/pulls/${prNumber}/comments`, '--paginate']).trim();
     if (!json) {
       return [];
     }
@@ -62,10 +56,7 @@ interface GitHubCommentRaw {
 
 export function pullComments(owner: string, repo: string, prNumber: number): PulledThread[] {
   try {
-    const json = execSync(
-      `gh api repos/${owner}/${repo}/pulls/${prNumber}/comments --paginate`,
-      { encoding: 'utf-8', stdio: 'pipe', maxBuffer: 10 * 1024 * 1024 },
-    ).trim();
+    const json = gh(['api', `repos/${owner}/${repo}/pulls/${prNumber}/comments`, '--paginate']).trim();
     if (!json) {
       return [];
     }
@@ -153,13 +144,9 @@ export function pushComments(
         payload.start_line = comment.startLine;
         payload.start_side = comment.side;
       }
-      execSync(
-        `gh api repos/${owner}/${repo}/pulls/${prNumber}/comments --method POST --input -`,
-        {
-          input: JSON.stringify(payload),
-          encoding: 'utf-8',
-          stdio: 'pipe',
-        },
+      gh(
+        ['api', `repos/${owner}/${repo}/pulls/${prNumber}/comments`, '--method', 'POST', '--input', '-'],
+        JSON.stringify(payload),
       );
       pushed++;
     } catch (err) {

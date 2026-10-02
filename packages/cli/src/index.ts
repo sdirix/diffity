@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
 import open from 'open';
 import pc from 'picocolors';
-import { isGitRepo, isValidGitRef, getRepoRoot, getRepoName, normalizeRef, WORKING_TREE_REFS } from '@diffity/git';
+import { isGitRepo, isValidGitRef, getRepoRoot, getRepoName, normalizeRef, fetchRemoteBranch, WORKING_TREE_REFS } from '@diffity/git';
 import {
   isGitHubPrUrl,
   parseGitHubPrUrl,
@@ -155,7 +155,17 @@ range syntax (main..feature, main...feature) also work.`)
         process.exit(1);
       }
 
-      refs[0] = baseRef;
+      // The local base branch may be missing or behind, so diff against the fetched one.
+      try {
+        if (!opts.quiet) {
+          console.log(pc.dim(`  Fetching ${baseRef}...`));
+        }
+        refs[0] = fetchRemoteBranch('origin', baseRef);
+      } catch (err) {
+        console.error(pc.red(`Error: Failed to fetch base branch ${baseRef}.`));
+        console.log(`  ${err}`);
+        process.exit(1);
+      }
     }
 
     // --base/--compare flags take precedence over positional args

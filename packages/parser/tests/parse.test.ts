@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parseDiff } from '../src/parse.js';
+import { parseDiff, WORD_DIFF_MAX_LINE_LENGTH } from '../src/parse.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const fixture = (name: string) =>
@@ -270,6 +270,106 @@ describe('parseDiff', () => {
       expect(result.files[0].newPath).toBe('my folder/my file.ts');
     });
 
+    it('strips the tab git appends to names with spaces', () => {
+      const result = parseDiff([
+        'diff --git a/my file.ts b/my file.ts',
+        'new file mode 100644',
+        '--- /dev/null',
+        '+++ b/my file.ts\t',
+        '@@ -0,0 +1 @@',
+        '+x',
+        '',
+      ].join('\n'));
+
+      expect(result.files[0].oldPath).toBe('/dev/null');
+      expect(result.files[0].newPath).toBe('my file.ts');
+    });
+
+    it('unquotes C-style quoted names', () => {
+      const result = parseDiff([
+        'diff --git "a/q\\"t\\tx\\\\.ts" "b/q\\"t\\tx\\\\.ts"',
+        'index 1234567..abcdefg 100644',
+        '--- "a/q\\"t\\tx\\\\.ts"',
+        '+++ "b/q\\"t\\tx\\\\.ts"',
+        '@@ -1 +1 @@',
+        '-a',
+        '+b',
+        'diff --git "a/\\303\\274ber.ts" "b/\\303\\274ber.ts"',
+        'deleted file mode 100644',
+        '--- "a/\\303\\274ber.ts"',
+        '+++ /dev/null',
+        '@@ -1 +0,0 @@',
+        '-gone',
+        '',
+      ].join('\n'));
+
+      expect(result.files).toHaveLength(2);
+      expect(result.files[0].oldPath).toBe('q"t\tx\\.ts');
+      expect(result.files[0].newPath).toBe('q"t\tx\\.ts');
+      expect(result.files[1].oldPath).toBe('über.ts');
+      expect(result.files[1].status).toBe('deleted');
+    });
+
+    it('reads renames between quoted and unquoted names', () => {
+      const result = parseDiff([
+        'diff --git a/old name.ts "b/new\\"name.ts"',
+        'similarity index 100%',
+        'rename from old name.ts',
+        'rename to "new\\"name.ts"',
+        'diff --git a/x y b/z w',
+        'similarity index 100%',
+        'rename from x y',
+        'rename to z w',
+        '',
+      ].join('\n'));
+
+      expect(result.files).toHaveLength(2);
+      expect(result.files[0].oldPath).toBe('old name.ts');
+      expect(result.files[0].newPath).toBe('new"name.ts');
+      expect(result.files[0].status).toBe('renamed');
+      expect(result.files[1].oldPath).toBe('x y');
+      expect(result.files[1].newPath).toBe('z w');
+    });
+
+    it('splits unquoted names with spaces where both sides match', () => {
+      const result = parseDiff([
+        'diff --git a/a b/c b/a b/c',
+        'old mode 100644',
+        'new mode 100755',
+        '',
+      ].join('\n'));
+
+      expect(result.files[0].oldPath).toBe('a b/c');
+      expect(result.files[0].newPath).toBe('a b/c');
+    });
+
+    it('reads hunk content that looks like file headers by the hunk counts', () => {
+      const result = parseDiff([
+        'diff --git a/q.sql b/q.sql',
+        'index 1234567..abcdefg 100644',
+        '--- a/q.sql',
+        '+++ b/q.sql',
+        '@@ -1,3 +1,3 @@',
+        '--- old comment',
+        '+++ new comment',
+        '',
+        ' select 1;',
+        '',
+      ].join('\n'));
+
+      const file = result.files[0];
+      expect(file.oldPath).toBe('q.sql');
+      expect(file.newPath).toBe('q.sql');
+      expect(file.hunks[0].lines.map(l => [l.type, l.content])).toEqual([
+        ['delete', '-- old comment'],
+        ['add', '++ new comment'],
+        ['context', ''],
+        ['context', 'select 1;'],
+      ]);
+      expect(file.hunks[0].lines[3].oldLineNumber).toBe(3);
+      expect(file.hunks[0].lines[3].newLineNumber).toBe(3);
+    });
+
     it('handles unicode content', () => {
       const result = parseDiff(fixture('unicode-content.diff'));
 
@@ -308,5 +408,21 @@ describe('parseDiff', () => {
       expect(result.files[0].additions).toBe(0);
       expect(result.files[0].deletions).toBe(0);
     });
+  });
+});
+
+describe('long lines', () => {
+  it('skips word diffs for minified-length lines', () => {
+    const long = 'x'.repeat(5000);
+    const diff = parseDiff(`diff --git a/a.js b/a.js\n--- a/a.js\n+++ b/a.js\n@@ -1 +1 @@\n-${long}\n+${long}y\n`);
+    const lines = diff.files[0].hunks[0].lines;
+    expect(lines[0].wordDiff).toBeUndefined();
+    expect(lines[1].wordDiff).toBeUndefined();
+  });
+
+  it('keeps word diffs up to the limit', () => {
+    const line = 'x'.repeat(WORD_DIFF_MAX_LINE_LENGTH);
+    const diff = parseDiff(`diff --git a/a.js b/a.js\n--- a/a.js\n+++ b/a.js\n@@ -1 +1 @@\n-${line}\n+${line.slice(1)}y\n`);
+    expect(diff.files[0].hunks[0].lines[0].wordDiff).toBeDefined();
   });
 });

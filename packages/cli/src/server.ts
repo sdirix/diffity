@@ -19,10 +19,11 @@ import {
   getRepoInfo,
   getFileContent,
   getIndexFileContent,
+  getBaseFileContent,
   getStagedFiles,
   getUnstagedFiles,
   getRecentCommits,
-  getFileLineCount,
+  getFileLineCounts,
   resolveBaseRef,
   resolveHeadRef,
   resolveDiffArgs,
@@ -38,6 +39,9 @@ import {
   getWorkingTreeFileContent,
   getWorkingTreeRawFile,
   WORKING_TREE_REFS,
+  InputError,
+  assertRepoPath,
+  type BaseSource,
 } from '@diffity/git';
 import {
   detectRemote as detectGitHubRemote,
@@ -116,6 +120,23 @@ function readHeadSide(filePath: string, ref: string | undefined): string {
   return getFileContent(filePath, head.ref);
 }
 
+/** Answers a failed file read with 400 for a rejected path and 404 otherwise. */
+function sendFileError(res: ServerResponse, err: unknown, filePath: string) {
+  if (err instanceof InputError && err.code === 'invalid') {
+    sendError(res, 400, err.message);
+    return;
+  }
+  sendError(res, 404, `File not found: ${filePath}`);
+}
+
+function decodePathParam(pathname: string, prefix: string): string {
+  try {
+    return decodeURIComponent(pathname.slice(prefix.length));
+  } catch {
+    throw new InputError('Malformed path');
+  }
+}
+
 function descriptionForRef(ref: string): string {
   if (WORKING_TREE_REFS.has(ref)) {
     const labels: Record<string, string> = {
@@ -150,17 +171,15 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
 
   const includeUntracked = diffArgs.length === 0;
 
-  function enrichWithLineCounts(diff: ParsedDiff, baseRef: string): ParsedDiff {
-    for (const file of diff.files) {
-      if (file.status === 'added' || file.isBinary) {
-        continue;
-      }
-      const path = file.oldPath || file.newPath;
-      const count = getFileLineCount(path, baseRef);
+  function enrichWithLineCounts(diff: ParsedDiff, base: BaseSource): ParsedDiff {
+    const files = diff.files.filter((file) => file.status !== 'added' && !file.isBinary);
+    const counts = getFileLineCounts(files.map((file) => file.oldPath || file.newPath), base);
+    files.forEach((file, i) => {
+      const count = counts[i];
       if (count !== null) {
         file.oldFileLineCount = count;
       }
-    }
+    });
     return diff;
   }
 
@@ -208,14 +227,18 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
         if (pathname === '/api/revert-file' && req.method === 'POST') {
           try {
             const body = JSON.parse(await readBody(req));
-            const { filePath: path, isUntracked } = body;
+            const { filePath: path } = body;
             if (!path || typeof path !== 'string') {
               sendError(res, 400, 'Missing filePath');
               return;
             }
-            revertFile(path, !!isUntracked);
+            revertFile(path);
             sendJson(res, { ok: true });
           } catch (err) {
+            if (err instanceof InputError) {
+              sendError(res, 400, err.message);
+              return;
+            }
             sendError(res, 500, `Failed to revert file: ${err}`);
           }
           return;
@@ -249,12 +272,23 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
               sendError(res, 400, 'Missing filePath');
               return;
             }
+            if (line !== undefined && line !== null && !(Number.isInteger(line) && line > 0)) {
+              sendError(res, 400, 'Invalid line');
+              return;
+            }
+            if (filePath) {
+              assertRepoPath(filePath);
+            }
             const repoRoot = getRepoInfo().root;
             const fullPath = filePath ? join(repoRoot, filePath) : repoRoot;
             const gotoArg = line ? `${fullPath}:${line}` : fullPath;
             execFile('code', [repoRoot, '--goto', gotoArg], { timeout: 5000 }, () => {});
             sendJson(res, { ok: true });
           } catch (err) {
+            if (err instanceof InputError) {
+              sendError(res, 400, err.message);
+              return;
+            }
             sendError(res, 500, `Failed to open editor: ${err}`);
           }
           return;
@@ -337,14 +371,14 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
           const ref = url.searchParams.get('ref');
           const whitespace = url.searchParams.get('whitespace');
           const extraArgs = whitespace === 'hide' ? ['-w'] : [];
-          const baseRef = ref ? resolveBaseRef(ref) : 'HEAD';
+          const base = resolveBaseRef(ref || 'work');
 
           if (ref) {
             sendJson(
               res,
               enrichWithLineCounts(
                 parseDiff(resolveRef(ref, extraArgs)),
-                baseRef,
+                base,
               ),
             );
             return;
@@ -353,25 +387,23 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
           const args = whitespace === 'hide' ? [...diffArgs, '-w'] : diffArgs;
           sendJson(
             res,
-            enrichWithLineCounts(parseDiff(getFullDiff(args)), baseRef),
+            enrichWithLineCounts(parseDiff(getFullDiff(args)), base),
           );
           return;
         }
 
         if (pathname.startsWith('/api/file/')) {
-          const filePath = decodeURIComponent(
-            pathname.slice('/api/file/'.length),
-          );
+          const filePath = decodePathParam(pathname, '/api/file/');
           const ref = url.searchParams.get('ref') || undefined;
           const side = url.searchParams.get('side') === 'new' ? 'new' : 'old';
           try {
             const content =
               side === 'new'
                 ? readHeadSide(filePath, ref)
-                : getFileContent(filePath, ref ? resolveBaseRef(ref) : 'HEAD');
+                : getBaseFileContent(filePath, resolveBaseRef(ref || 'work'));
             sendJson(res, { path: filePath, content: content.split('\n') });
-          } catch {
-            sendError(res, 404, `File not found: ${filePath}`);
+          } catch (err) {
+            sendFileError(res, err, filePath);
           }
           return;
         }
@@ -531,36 +563,36 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
             const entries = getTreeEntries('HEAD', dirPath);
             sendJson(res, { entries });
           } catch (err) {
+            if (err instanceof InputError) {
+              sendError(res, 400, err.message);
+              return;
+            }
             sendError(res, 500, `Failed to get tree entries: ${err}`);
           }
           return;
         }
 
         if (pathname.startsWith('/api/tree/file/')) {
-          const filePath = decodeURIComponent(
-            pathname.slice('/api/tree/file/'.length),
-          );
+          const filePath = decodePathParam(pathname, '/api/tree/file/');
           try {
             const content = getWorkingTreeFileContent(filePath);
             sendJson(res, { path: filePath, content: content.split('\n') });
-          } catch {
-            sendError(res, 404, `File not found: ${filePath}`);
+          } catch (err) {
+            sendFileError(res, err, filePath);
           }
           return;
         }
 
         if (pathname.startsWith('/api/tree/raw/')) {
-          const filePath = decodeURIComponent(
-            pathname.slice('/api/tree/raw/'.length),
-          );
+          const filePath = decodePathParam(pathname, '/api/tree/raw/');
           try {
             const { data } = getWorkingTreeRawFile(filePath);
             const ext = extname(filePath);
             const mime = MIME_TYPES[ext] || 'application/octet-stream';
             res.writeHead(200, { 'Content-Type': mime });
             res.end(data);
-          } catch {
-            sendError(res, 404, `File not found: ${filePath}`);
+          } catch (err) {
+            sendFileError(res, err, filePath);
           }
           return;
         }
@@ -594,6 +626,10 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
         serveStatic(res, filePath);
       } catch (err) {
         if (!res.headersSent) {
+          if (err instanceof InputError) {
+            sendError(res, err.code === 'not_found' ? 404 : 400, err.message);
+            return;
+          }
           sendError(res, 500, `${err instanceof Error ? err.message : err}`);
         }
       }

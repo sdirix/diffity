@@ -1,36 +1,27 @@
-import { execFileSync, execSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { homedir } from 'node:os';
-import { exec } from './exec.js';
+import { InputError } from './errors.js';
+import { getRepoRoot, git, gitTry } from './exec.js';
+import { verifyCommit } from './refs.js';
 import { WORKING_TREE_REFS } from './diff.js';
 import type { RepoInfo } from './types.js';
 
 export function isGitRepo(): boolean {
-  try {
-    execSync('git rev-parse --is-inside-work-tree', { stdio: 'pipe' });
-    return true;
-  } catch {
-    return false;
-  }
+  return gitTry(['rev-parse', '--is-inside-work-tree'])?.trim() === 'true';
 }
 
-export function getRepoRoot(): string {
-  return exec('git rev-parse --show-toplevel');
-}
+export { getRepoRoot };
 
 export function getRepoName(): string {
   const root = getRepoRoot();
-  return root.split('/').pop() || root;
+  return basename(root) || root;
 }
 
+/** The checked out branch, also when it has no commits yet, or `HEAD` when detached. */
 export function getCurrentBranch(): string {
-  try {
-    return exec('git rev-parse --abbrev-ref HEAD');
-  } catch {
-    return 'HEAD';
-  }
+  return gitTry(['symbolic-ref', '--quiet', '--short', 'HEAD'])?.trim() || 'HEAD';
 }
 
 export function getRepoInfo(): RepoInfo {
@@ -39,10 +30,6 @@ export function getRepoInfo(): RepoInfo {
     branch: getCurrentBranch(),
     root: getRepoRoot(),
   };
-}
-
-export function getHeadHash(): string {
-  return exec('git rev-parse HEAD');
 }
 
 export function getDiffityDirPath(): string {
@@ -58,22 +45,32 @@ export function getDiffityDir(): string {
 }
 
 export function isValidGitRef(ref: string): boolean {
-  if (ref.includes('...')) {
-    const parts = ref.split('...');
-    return parts.every((p) => isValidGitRef(p));
+  for (const sep of ['...', '..']) {
+    const idx = ref.indexOf(sep);
+    if (idx !== -1) {
+      const left = ref.slice(0, idx) || 'HEAD';
+      const right = ref.slice(idx + sep.length) || 'HEAD';
+      return verifyCommit(left) !== null && verifyCommit(right) !== null;
+    }
   }
+  return verifyCommit(ref) !== null;
+}
 
-  if (ref.includes('..')) {
-    const parts = ref.split('..');
-    return parts.every((p) => isValidGitRef(p));
-  }
+export function getRemoteUrl(name = 'origin'): string | null {
+  return gitTry(['remote', 'get-url', '--', name])?.trim() || null;
+}
 
-  try {
-    execFileSync('git', ['rev-parse', '--verify', ref], { stdio: 'pipe' });
-    return true;
-  } catch {
-    return false;
+/**
+ * Fetches `branch` from `remote` into its remote-tracking ref and returns
+ * that ref, e.g. `origin/main`, which is current even when the local branch
+ * is missing or stale.
+ */
+export function fetchRemoteBranch(remote: string, branch: string): string {
+  if (!remote || remote.startsWith('-') || !branch) {
+    throw new InputError(`Invalid branch: ${remote}/${branch}`);
   }
+  git(['fetch', remote, `+refs/heads/${branch}:refs/remotes/${remote}/${branch}`]);
+  return `${remote}/${branch}`;
 }
 
 export interface RefCapabilities {

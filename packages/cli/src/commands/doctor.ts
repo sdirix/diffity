@@ -1,5 +1,5 @@
 import type { Command } from 'commander';
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import pc from 'picocolors';
 import { isGitRepo } from '@diffity/git';
@@ -15,7 +15,7 @@ export function registerDoctorCommand(program: Command, version: string) {
 
       process.stdout.write('  git          ');
       try {
-        const gitVersion = execSync('git --version', { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
+        const gitVersion = execFileSync('git', ['--version'], { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
         console.log(pc.green(`✓ ${gitVersion}`));
       } catch {
         console.log(pc.red('✗ git not found'));

@@ -1,6 +1,6 @@
-import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { git, gitNul } from './exec.js';
+import { assertRepoPath, resolveInRepo } from './paths.js';
 
 export interface TreeEntry {
   type: 'blob' | 'tree';
@@ -9,36 +9,24 @@ export interface TreeEntry {
 }
 
 function getWorkingTreeFiles(dirPath?: string): string[] {
+  if (dirPath) {
+    assertRepoPath(dirPath);
+  }
   const pathArgs = dirPath ? [dirPath + '/'] : [];
 
-  const tracked = execFileSync('git', ['ls-files', ...pathArgs], {
-    encoding: 'utf-8',
-  }).trim();
+  const tracked = gitNul(['--literal-pathspecs', 'ls-files', '-z', '--', ...pathArgs]);
+  const deleted = new Set(gitNul(['--literal-pathspecs', 'ls-files', '-z', '--deleted', '--', ...pathArgs]));
+  const untracked = gitNul(['--literal-pathspecs', 'ls-files', '-z', '--others', '--exclude-standard', '--', ...pathArgs])
+    .filter((f) => !f.endsWith('/'));
 
-  const deleted = execFileSync('git', ['ls-files', '--deleted', ...pathArgs], {
-    encoding: 'utf-8',
-  }).trim();
-
-  const untracked = execFileSync(
-    'git',
-    ['ls-files', '--others', '--exclude-standard', ...pathArgs],
-    { encoding: 'utf-8' },
-  ).trim();
-
-  const deletedSet = new Set(deleted ? deleted.split('\n') : []);
   const files = new Set<string>();
-
-  if (tracked) {
-    for (const f of tracked.split('\n')) {
-      if (!deletedSet.has(f)) {
-        files.add(f);
-      }
-    }
-  }
-  if (untracked) {
-    for (const f of untracked.split('\n')) {
+  for (const f of tracked) {
+    if (!deleted.has(f)) {
       files.add(f);
     }
+  }
+  for (const f of untracked) {
+    files.add(f);
   }
 
   return Array.from(files).sort();
@@ -71,30 +59,17 @@ export function getTreeEntries(_ref = 'HEAD', dirPath?: string): TreeEntry[] {
 }
 
 export function getTreeFingerprint(): string {
-  const tracked = execFileSync('git', ['ls-files'], {
-    encoding: 'utf-8',
-  }).trim();
-
-  const statOutput = execFileSync(
-    'git',
-    ['status', '--porcelain', '-u'],
-    { encoding: 'utf-8' },
-  ).trim();
+  const tracked = git(['ls-files', '-z']);
+  const statOutput = git(['status', '--porcelain', '-u']).trim();
 
   return `${tracked.length}:${statOutput}`;
 }
 
 export function getWorkingTreeFileContent(filePath: string): string {
-  const root = execFileSync('git', ['rev-parse', '--show-toplevel'], {
-    encoding: 'utf-8',
-  }).trim();
-  return readFileSync(join(root, filePath), 'utf-8');
+  return readFileSync(resolveInRepo(filePath), 'utf-8');
 }
 
 export function getWorkingTreeRawFile(filePath: string): { data: Buffer; fullPath: string } {
-  const root = execFileSync('git', ['rev-parse', '--show-toplevel'], {
-    encoding: 'utf-8',
-  }).trim();
-  const fullPath = join(root, filePath);
+  const fullPath = resolveInRepo(filePath);
   return { data: readFileSync(fullPath), fullPath };
 }

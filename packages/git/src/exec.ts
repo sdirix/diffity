@@ -1,35 +1,84 @@
-import { execSync, type StdioOptions } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 
-const STDIO: StdioOptions = ['pipe', 'pipe', 'pipe'];
+const MAX_BUFFER = 256 * 1024 * 1024;
 
-export function execWithStdin(cmd: string, input: string): string {
-  return execSync(cmd, {
-    encoding: 'utf-8',
-    stdio: STDIO,
-    input,
-    maxBuffer: 50 * 1024 * 1024,
-  });
-}
+/**
+ * Set for every git call: the C locale keeps messages stable, no optional
+ * locks keep read-only calls from blocking the user's own git commands, and
+ * no terminal prompt keeps a credential request from hanging the server.
+ */
+const GIT_ENV = {
+  LC_ALL: 'C',
+  GIT_OPTIONAL_LOCKS: '0',
+  GIT_TERMINAL_PROMPT: '0',
+};
 
-export function exec(cmd: string): string {
-  return execSync(cmd, {
-    encoding: 'utf-8',
-    stdio: STDIO,
-  }).trim();
-}
-
-export function execLarge(cmd: string): string {
-  return execSync(cmd, {
-    encoding: 'utf-8',
-    stdio: STDIO,
-    maxBuffer: 50 * 1024 * 1024,
-  });
-}
-
-export function execLines(cmd: string): string[] {
-  const output = exec(cmd);
-  if (!output) {
-    return [];
+export class GitError extends Error {
+  constructor(message: string, readonly status: number | null) {
+    super(message);
+    this.name = 'GitError';
   }
-  return output.split('\n');
+}
+
+export interface GitOptions {
+  input?: string | Buffer;
+  /** Exit codes that count as success, `[0]` by default. */
+  okCodes?: number[];
+  /** Defaults to the repo root, so paths are root relative wherever diffity was started. */
+  cwd?: string;
+}
+
+/** Runs git with an argument vector, never through a shell. */
+export function gitBuffer(args: string[], options: GitOptions = {}): Buffer {
+  const result = spawnSync('git', ['-c', 'core.quotepath=off', ...args], {
+    cwd: options.cwd ?? getRepoRoot(),
+    env: { ...process.env, ...GIT_ENV },
+    input: options.input,
+    stdio: [options.input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
+    maxBuffer: MAX_BUFFER,
+  });
+  if (result.error) {
+    throw result.error;
+  }
+  const okCodes = options.okCodes ?? [0];
+  if (result.status === null || !okCodes.includes(result.status)) {
+    const stderr = result.stderr.toString('utf-8').trim();
+    const command = args.find((arg) => !arg.startsWith('-')) ?? '';
+    throw new GitError(`git ${command} failed: ${stderr}`, result.status);
+  }
+  return result.stdout;
+}
+
+/** Raw stdout. Use for content, which must keep its whitespace. */
+export function git(args: string[], options?: GitOptions): string {
+  return gitBuffer(args, options).toString('utf-8');
+}
+
+/** Stdout split on NUL, for `-z` listings whose names may contain any character. */
+export function gitNul(args: string[], options?: GitOptions): string[] {
+  return git(args, options).split('\0').filter(Boolean);
+}
+
+/** Like `git`, but `null` when git exits with an error. */
+export function gitTry(args: string[], options?: GitOptions): string | null {
+  try {
+    return git(args, options);
+  } catch (err) {
+    if (err instanceof GitError) {
+      return null;
+    }
+    throw err;
+  }
+}
+
+const roots = new Map<string, string>();
+
+export function getRepoRoot(): string {
+  const cwd = process.cwd();
+  let root = roots.get(cwd);
+  if (root === undefined) {
+    root = git(['rev-parse', '--show-toplevel'], { cwd }).replace(/\n$/, '');
+    roots.set(cwd, root);
+  }
+  return root;
 }

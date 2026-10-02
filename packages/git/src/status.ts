@@ -1,13 +1,14 @@
-import { exec, execLines } from './exec.js';
+import { DIFF_FORMAT_ARGS } from './diff.js';
+import { git, gitNul } from './exec.js';
 
 export function getStagedFiles(): string[] {
-  return execLines('git diff --staged --name-only');
+  return gitNul(['diff', ...DIFF_FORMAT_ARGS, '--staged', '--name-only', '-z']);
 }
 
 export function getUnstagedFiles(): string[] {
-  return execLines('git diff --name-only');
+  return gitNul(['diff', ...DIFF_FORMAT_ARGS, '--name-only', '-z']);
 }
 
 export function isDirty(): boolean {
-  return exec('git status --porcelain').length > 0;
+  return git(['status', '--porcelain']).trim().length > 0;
 }

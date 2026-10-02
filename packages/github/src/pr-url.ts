@@ -1,4 +1,4 @@
-import { exec } from './exec.js';
+import { gh } from './exec.js';
 
 const PR_URL_REGEX = /(?:https?:\/\/)?github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)/;
 
@@ -20,9 +20,9 @@ export function parseGitHubPrUrl(url: string): { owner: string; repo: string; nu
 }
 
 export function checkoutPr(prNumber: number): void {
-  exec(`gh pr checkout ${prNumber}`);
+  gh(['pr', 'checkout', String(prNumber)]);
 }
 
 export function getPrBaseRef(prNumber: number): string {
-  return exec(`gh pr view ${prNumber} --json baseRefName --jq '.baseRefName'`);
+  return gh(['pr', 'view', String(prNumber), '--json', 'baseRefName', '--jq', '.baseRefName']).trim();
 }

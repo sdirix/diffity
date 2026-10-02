@@ -1,8 +1,13 @@
 export type { Commit, RepoInfo } from './types.js';
 export type { RefCapabilities } from './repo.js';
-export { isGitRepo, getRepoRoot, getRepoName, getCurrentBranch, getRepoInfo, getHeadHash, getDiffityDir, getDiffityDirPath, getRefCapabilities, isValidGitRef } from './repo.js';
-export { getDiff, getDiffFiles, getDiffStat, getDiffStatForRef, getUntrackedFiles, getUntrackedDiff, getFileContent, getIndexFileContent, getFileLineCount, getMergeBase, normalizeRef, resolveBaseRef, resolveHeadRef, resolveDiffArgs, resolveRef, revertFile, revertHunk, WORKING_TREE_REFS } from './diff.js';
-export type { RefDiffArgs, HeadSource } from './diff.js';
+export { isGitRepo, getRepoRoot, getRepoName, getCurrentBranch, getRepoInfo, getDiffityDir, getDiffityDirPath, getRefCapabilities, isValidGitRef, getRemoteUrl, fetchRemoteBranch } from './repo.js';
+export { getDiff, getDiffFiles, getDiffStat, getDiffStatForRef, getUntrackedFiles, getFileContent, getIndexFileContent, getBaseFileContent, getFileLineCounts, normalizeRef, resolveBaseRef, resolveHeadRef, resolveDiffArgs, resolveRef, revertFile, revertHunk, WORKING_TREE_REFS } from './diff.js';
+export type { RefDiffArgs, BaseSource, HeadSource } from './diff.js';
+export { getMergeBase, verifyCommit, getHeadHash } from './refs.js';
+export { GitError } from './exec.js';
+export { InputError } from './errors.js';
+export { assertRepoPath, resolveInRepo } from './paths.js';
+export { getUntrackedDiff } from './untracked.js';
 export { getStagedFiles, getUnstagedFiles, isDirty } from './status.js';
 export { getRecentCommits } from './commits.js';
 export { getTree, getTreeEntries, getTreeFingerprint, getWorkingTreeFileContent, getWorkingTreeRawFile } from './tree.js';
