@@ -83,7 +83,7 @@ Leave comments on any line — when you're done, run `/diffity-resolve` to have 
 
 ### `/diffity-review`
 
-Your agent reviews the diff and leaves inline comments in the viewer. Uses severity tags (`[must-fix]`, `[suggestion]`, `[nit]`, `[question]`) so you can triage by importance. Supports refs, focus areas, and natural language:
+Your agent reviews the diff and leaves inline comments in the viewer. Uses severity tags (`[must-fix]`, `[suggestion]`, `[nit]`, `[question]`) so you can triage by importance. Supports refs, focus areas, paths, and natural language. Your instructions take priority over the generic checklist:
 
 ```
 /diffity-review                             # review working tree changes
@@ -94,14 +94,26 @@ Your agent reviews the diff and leaves inline comments in the viewer. Uses sever
 /diffity-review last 3 commits              # natural language works too
 ```
 
+### `/diffity-summarize`
+
+Your agent summarizes the diff for a reviewer and posts it as a general comment in the viewer: overview, changes by area, behavior changes, and spots worth a closer look. Running it again replaces the previous summary.
+
+```
+/diffity-summarize                     # summarize working tree changes
+/diffity-summarize main                # summarize what you're merging into main
+```
+
 ### `/diffity-resolve`
 
-Reads all open comments and makes the requested code changes. Works with both your comments and AI review comments:
+Reads all open comments and makes the requested code changes. Works with both your comments and AI review comments. Questions get an answer in the thread and stay open:
 
 ```
 /diffity-resolve                       # resolve all open comments
-/diffity-resolve abc123                # resolve a specific thread by ID
+/diffity-resolve main                  # resolve the comments on the main diff
+/diffity-resolve abc12345              # resolve a specific thread by ID
 ```
+
+Without a ref it resolves the diff your agent reviewed or opened in the conversation, else the diff you opened last in the browser.
 
 A typical workflow: run `/diffity-review` to get AI feedback, check the comments in the browser, then run `/diffity-resolve` to apply the fixes.
 
@@ -129,7 +141,7 @@ Reads open comments from the tree browser and makes the requested code changes:
 
 ```
 /diffity-resolve-tree                  # resolve all open comments
-/diffity-resolve-tree abc123           # resolve a specific thread by ID
+/diffity-resolve-tree abc12345         # resolve a specific thread by ID
 ```
 
 ## Guided code tours
@@ -200,6 +212,7 @@ The skills work with PR URLs too:
 ```
 /diffity-diff https://github.com/owner/repo/pull/123
 /diffity-review https://github.com/owner/repo/pull/123
+/diffity-summarize https://github.com/owner/repo/pull/123
 /diffity-tour https://github.com/owner/repo/pull/123
 ```
 

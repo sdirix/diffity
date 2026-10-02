@@ -24,11 +24,13 @@ When the argument is a **GitHub PR URL** (matching `github.com/owner/repo/pull/N
 ## CLI Reference
 
 ```
-{{binary}} agent tour-start --topic "<text>" [--body "<text>"] --json
+{{binary}} agent tour-start --ref __tree__ --topic "<text>" [--body "<text>"] --json
 {{binary}} agent tour-step --tour <id> --file <path> --line <n> [--end-line <n>] --body "<text>" [--annotation "<text>"] --json
 {{binary}} agent tour-done --tour <id> --json
 {{binary}} list --json
 ```
+
+- `--ref __tree__` files the tour under the file browser session, whichever view was opened last. Tours open by id, so PR tours use it too.
 
 ## Prerequisites
 
@@ -36,7 +38,7 @@ When the argument is a **GitHub PR URL** (matching `github.com/owner/repo/pull/N
 2. **If the argument is a GitHub PR URL**:
    - Check `gh` is installed and authenticated: run `gh auth status`. If not authenticated, stop and ask the user to run `gh auth login`.
    - Verify the current repo matches the PR's repo: run `gh repo view --json nameWithOwner -q .nameWithOwner` and confirm it matches the `owner/repo` in the URL. If it doesn't, stop and tell the user they need to be inside the PR's repository clone — diffity can't tour a PR for a repo you don't have checked out.
-   - Start diffity against the PR: run `{{binary}} --no-open <pr-url>` using the Bash tool with `run_in_background: true`. **The `--no-open` flag must come BEFORE the URL** — commander's `passThroughOptions()` will slurp any flag that appears after the positional URL into the refs array, skipping PR handling and producing an "unknown ref" error. This command checks out the PR's branch locally and starts a diff-scoped session. Wait 2 seconds, then run `{{binary}} list --json` to get the port. You do **not** also need a tree instance — the diff session supports `agent tour-*` commands.
+   - Start diffity against the PR: run `{{binary}} --no-open <pr-url>` using the Bash tool with `run_in_background: true`. This command checks out the PR's branch locally and starts a diff-scoped session. Wait 2 seconds, then run `{{binary}} list --json` to get the port. You do **not** also need a tree instance. Any running instance opens tours by id.
 3. **Otherwise**, ensure a tree instance is running: run `{{binary}} list --json`.
    - If no instance is running, start one: run `{{binary}} tree --no-open` using the Bash tool with `run_in_background: true`, wait 2 seconds, then run `{{binary}} list --json` to get the port.
 
@@ -122,7 +124,7 @@ The tour UI has a dedicated explanation panel. The intro (from `tour-start --bod
 
 1. **Start the tour** with a short topic title and introductory body:
    ```
-   {{binary}} agent tour-start --topic "<short title>" --body "<intro>" --json
+   {{binary}} agent tour-start --ref __tree__ --topic "<short title>" --body "<intro>" --json
    ```
 
    The `--topic` is displayed in the tour panel header — keep it to **3–6 words** (e.g. "Authentication Flow", "How Routing Works", "Comment System Architecture"). Do NOT use the user's full question as the topic.

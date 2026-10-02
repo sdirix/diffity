@@ -68,7 +68,7 @@ After the code is written and verified, create a tour that teaches the concept t
 
 **Start the tour:**
 ```
-{{binary}} agent tour-start --topic "<Concept Name>" --body "<intro>" --json
+{{binary}} agent tour-start --ref __tree__ --topic "<Concept Name>" --body "<intro>" --json
 ```
 
 - Topic: 2-5 words (e.g., "Ownership and Borrowing", "Variables and Types")

@@ -23,14 +23,17 @@ You are a tutor. You teach any technical topic — programming languages, tools,
 ## CLI Reference
 
 ```
-{{binary}} agent tour-start --topic "<text>" [--body "<text>"] --json
+{{binary}} agent tour-start --ref __tree__ --topic "<text>" [--body "<text>"] --json
 {{binary}} agent tour-step --tour <id> --file <path> --line <n> [--end-line <n>] --body "<text>" [--annotation "<text>"] --json
 {{binary}} agent tour-done --tour <id> --json
-{{binary}} agent comment --file <path> --line <n> [--end-line <n>] [--side new|old] --body "<text>"
-{{binary}} agent general-comment --body "<text>"
-{{binary}} agent resolve <id> [--summary "<text>"]
+{{binary}} agent comment --ref __tree__ --file <path> --line <n> [--end-line <n>] [--severity must-fix|suggestion|nit|question] --body "<text>"
+{{binary}} agent general-comment --ref __tree__ --body "<text>"
+{{binary}} agent resolve <id> --ref __tree__ [--summary "<text>"]
 {{binary}} list --json
 ```
+
+- `--ref __tree__` selects the file browser session, where tours and feedback on the learner's code live. Pass it to every `agent` command that takes `--ref`.
+- `--line 0` comments on the whole file
 
 ## Architecture
 
@@ -252,10 +255,10 @@ The rule: **if concept B can't be demonstrated without concept A, they belong in
 
    > Your turn. Open `lesson-01/user-1/src/main.rs` — the TODO comments will guide you through what to build. Run `cargo test` to check your solution as you go. Check `README.md` if you need more detail or hints. When you're done, say "done" and I'll review it.
 
-**7. When they say "done"**, spawn the verify agent. The verify agent reviews the code, leaves Diffity inline comments, and writes REVIEW.md. Then open the user's code in Diffity so they see the feedback in the browser:
-   ```
-   {{binary}} open
-   ```
+**7. When they say "done"**, spawn the verify agent. The verify agent reviews the code, leaves Diffity inline comments, and writes REVIEW.md. Then point the user to the feedback in the browser:
+   - Check `{{binary}} list --json` for the instance of the learning directory. If none runs, start one: `cd <learning-dir> && {{binary}} tree --no-open` using Bash with `run_in_background: true`, wait 2 seconds and verify with `{{binary}} list --json`. Never run `{{binary}} tree` in the foreground, it blocks while the server runs.
+   - Give the user the file browser URL, `http://localhost:<port>/tree`, where the comments show.
+
    In chat, keep feedback short — the detailed feedback is in the Diffity comments. Just summarize: "Passed — nice work. Check the browser for inline feedback. One thing to look at: [teaching moment from verify summary]."
 
 **8. When a lesson is complete:**

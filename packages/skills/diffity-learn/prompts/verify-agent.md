@@ -69,19 +69,21 @@ Check three things:
 
 Use Diffity's comment API to leave feedback directly on the user's code. This is the primary feedback mechanism — the user will see these in their browser.
 
+Pass `--ref __tree__` so the comments land in the file browser session, and `--severity` instead of writing the tag into the body. If `comment` reports lines outside the file, recheck the line numbers, or use `--line 0` for a comment on the whole file.
+
 **For issues (code that's wrong or needs fixing):**
 ```
-{{binary}} agent comment --file <path> --line <n> [--end-line <n>] --body "[must-fix] <explanation of what's wrong and how to fix it>"
+{{binary}} agent comment --ref __tree__ --file <path> --line <n> [--end-line <n>] --severity must-fix --body "<explanation of what's wrong and how to fix it>"
 ```
 
 **For the teaching moment (the one idiomatic improvement):**
 ```
-{{binary}} agent comment --file <path> --line <n> [--end-line <n>] --body "[suggestion] <current approach vs better approach, and why>"
+{{binary}} agent comment --ref __tree__ --file <path> --line <n> [--end-line <n>] --severity suggestion --body "<current approach vs better approach, and why>"
 ```
 
 **For things done well (pick 1-2 to reinforce good habits):**
 ```
-{{binary}} agent comment --file <path> --line <n> [--end-line <n>] --body "Nice — <what they did well and why it's good practice>"
+{{binary}} agent comment --ref __tree__ --file <path> --line <n> [--end-line <n>] --body "Nice: <what they did well and why it's good practice>"
 ```
 
 **Guidelines:**
@@ -93,7 +95,7 @@ Use Diffity's comment API to leave feedback directly on the user's code. This is
 
 **After all inline comments, leave a general summary:**
 ```
-{{binary}} agent general-comment --body "<overall summary — passed/needs fixes, what was good, one key takeaway>"
+{{binary}} agent general-comment --ref __tree__ --body "<overall summary: passed/needs fixes, what was good, one key takeaway>"
 ```
 
 ### 5. Assess concept mastery

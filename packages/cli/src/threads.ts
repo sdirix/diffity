@@ -231,8 +231,9 @@ export function findThread(sessionId: string, idOrPrefix: string): Thread {
       'SELECT ref, scope FROM review_sessions WHERE id = ?',
       elsewhere.session_id,
     );
+    const sid = elsewhere.session_id;
     const where = session ? ` (ref "${session.ref}"${session.scope ? ` on ${session.scope}` : ''})` : '';
-    throw new Error(`Thread ${id} belongs to another session${where}`);
+    throw new Error(`Thread ${id} belongs to session ${sid}${where}. Rerun without --ref and with DIFFITY_SESSION_ID=${sid}`);
   }
   throw new Error(`Thread not found: ${id}`);
 }

@@ -2,9 +2,9 @@
 
 import { execSync } from 'child_process';
 import { dirname, resolve, join } from 'path';
-import { rmSync } from 'fs';
 import { fileURLToPath } from 'url';
 import concurrently from 'concurrently';
+import { removeDevSkills } from './lib/utils.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const rootDir = resolve(__dirname, '..');
@@ -19,7 +19,7 @@ const globalClaudeSkillsDir = join(homeDir, '.claude', 'skills');
 
 function cleanupDevSkills() {
   try {
-    rmSync(globalClaudeSkillsDir, { recursive: true, force: true });
+    removeDevSkills(globalClaudeSkillsDir);
     console.log('Cleaned up dev skills');
   } catch {}
 }

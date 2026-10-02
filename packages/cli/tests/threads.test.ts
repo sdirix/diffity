@@ -39,7 +39,9 @@ describe('findThread', () => {
     expect(() => findThread(session.id, 'aaaa')).toThrow('at least 8 characters');
     expect(() => findThread(session.id, 'aaaaaaaa')).toThrow('ambiguous');
     expect(findThread(session.id, 'aaaaaaaa-2').id).toBe('aaaaaaaa-2');
-    expect(() => findThread(session.id, 'bbbbbbbb')).toThrow('belongs to another session (ref "__tree__")');
+    expect(() => findThread(session.id, 'bbbbbbbb')).toThrow(
+      `belongs to session ${other.id} (ref "__tree__"). Rerun without --ref and with DIFFITY_SESSION_ID=${other.id}`,
+    );
     expect(() => findThread(session.id, 'cccc_ccc')).toThrow('not found');
     expect(findThread(session.id, 'cccc%ccc').id).toBe('cccc%ccc-1');
   });
