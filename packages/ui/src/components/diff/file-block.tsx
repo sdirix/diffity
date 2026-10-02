@@ -1,17 +1,17 @@
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useMemo, useCallback } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { DiffHunk } from '@diffity/parser';
 import type { DiffFile, DiffLine as DiffLineType } from '@diffity/parser';
-import type { SyntaxToken } from '../../lib/syntax-token';
 import type { CodeHighlighter } from '../../hooks/use-highlighter';
 import type { CommentSide, LineSelection } from '../comments/types';
-import { type ViewMode, getFilePath, buildChangeGroupPatch, extractLinesFromDiff, extractLinesFromExpandedLines } from '../../lib/diff-utils';
+import { type ViewMode, getFilePath, buildChangeGroupPatch, extractLinesFromDiff, extractLinesFromExpandedLines, newFileLineCount } from '../../lib/diff-utils';
 import { revertHunk as apiRevertHunk } from '../../lib/api';
 import { withToast } from '../../lib/toast';
 import { ConfirmDialog } from '../ui/confirm-dialog';
 import { computeGaps, createContextLines, getExpandRange, type ExpandableGap } from '../../lib/context-expansion';
 import { fileContentOptions, headFileContentOptions } from '../../queries/file';
-import { buildSyntaxMap, planSyntaxSources, sidesShown, tokenizeSources, type SideTokens } from '../../lib/syntax-lines';
+import { sidesShown } from '../../lib/syntax-lines';
+import { useSyntaxMap } from '../../hooks/use-syntax-map';
 import type { CommentActions } from '../../hooks/use-comment-actions';
 import type { CommentThread } from '../comments/types';
 import { GENERAL_THREAD_FILE_PATH, DEFAULT_AUTHOR } from '../comments/types';
@@ -26,32 +26,40 @@ import { IconButton } from '../ui/icon-button';
 import { StatusBadge } from '../ui/status-badge';
 import { HunkWithGap } from './hunk-with-gap';
 import { OrphanedThreads } from '../comments/orphaned-threads';
+import { FileComments } from '../comments/file-comments';
 import { ThreadBadge } from '../ui/thread-badge';
 import { buildExpansionSyntaxMap, renderExpansionRows } from './render-expansion-rows';
 import { ExpandRow } from './expand-row';
 import { EyeIcon } from '../icons/eye-icon';
+import { Spinner } from '../icons/spinner';
+import { LazySlice } from './lazy-slice';
+import { hunkUnits, isPinnedSlice, sliceRowCount } from '../../lib/hunk-slices';
+import { SinceViewedBadge, SinceViewedDiff, type SinceViewedInfo } from './since-viewed';
 import { isMarkdownFile } from '../../lib/file-types';
+import { useViewState } from '../../lib/view-state';
+import { cn } from '../../lib/cn';
 
-export const LARGE_DIFF_LINE_THRESHOLD = 200;
 /** Longer files are highlighted from their hunks only. */
 const HIGHLIGHT_MAX_FILE_LINES = 10000;
-/** Main thread budget per highlighting step. The rest waits for the next task so scrolling stays smooth. */
-const HIGHLIGHT_BUDGET_MS = 8;
 
-function getTotalLineCount(file: DiffFile): number {
-  let count = 0;
-  for (const hunk of file.hunks) {
-    count += hunk.lines.length;
-  }
-  return count;
+/** A file waiting for "Load diff". */
+export interface HeldBack {
+  reason: string;
+  rows: number;
+  onLoad: () => void;
 }
 
-interface FileBlockProps {
+export interface FileBlockProps {
   file: DiffFile;
   viewMode: ViewMode;
   collapsed: boolean;
   onToggleCollapse: (path: string) => void;
   reviewed: boolean;
+  /** Set when the file changed after it was marked viewed. */
+  sinceViewed?: SinceViewedInfo | null;
+  /** Shows only the changes since viewed instead of the diff. */
+  showSinceViewed?: boolean;
+  onShowSinceViewedChange?: (path: string, show: boolean) => void;
   onReviewedChange: (path: string, reviewed: boolean) => void;
   highlightCode?: CodeHighlighter;
   baseRef?: string;
@@ -66,8 +74,11 @@ interface FileBlockProps {
   onPendingSelectionChange: (selection: LineSelection | null) => void;
   highlighted?: boolean;
   onHighlightEnd?: () => void;
-  /** Renders a large diff without waiting for "Load diff", for example to show a find match. */
-  expandLargeDiff?: boolean;
+  heldBack?: HeldBack | null;
+  /** The hunks of a `trimmed` file are being fetched or could not be. */
+  patchState?: 'loading' | 'error';
+  /** Lines kept mounted, like the current find match (`add-12`). */
+  pinnedLines?: string[];
 }
 
 interface GapExpansion {
@@ -79,18 +90,12 @@ interface GapExpansion {
 
 export function FileBlock(props: FileBlockProps) {
   const {
-    file, viewMode, collapsed, onToggleCollapse, reviewed, onReviewedChange, highlightCode, baseRef, theme, canRevert, onRevert,
+    file, viewMode, collapsed, onToggleCollapse, reviewed, sinceViewed, showSinceViewed, onShowSinceViewedChange, onReviewedChange, highlightCode, baseRef, theme, canRevert, onRevert,
     threads: allThreads, commentsEnabled, commentActions, onAddThread: rawAddThread, pendingSelection, onPendingSelectionChange,
-    highlighted, onHighlightEnd, expandLargeDiff,
+    highlighted, onHighlightEnd, heldBack, patchState, pinnedLines,
   } = props;
 
-  const totalLines = getTotalLineCount(file);
-  const isLargeDiff = totalLines >= LARGE_DIFF_LINE_THRESHOLD;
-
-  const [largeDiffExpanded, setLargeDiffExpanded] = useState(false);
-  if (expandLargeDiff && isLargeDiff && !largeDiffExpanded) {
-    setLargeDiffExpanded(true);
-  }
+  const sinceViewedOpen = !!showSinceViewed && !!sinceViewed?.canDiff;
   const [expansions, setExpansions] = useState<Map<string, GapExpansion>>(new Map());
   const [loadingGap, setLoadingGap] = useState<{ id: string; direction: 'up' | 'down' | 'all' } | null>(null);
 
@@ -159,6 +164,7 @@ export function FileBlock(props: FileBlockProps) {
   const allFileThreads = useMemo(() => {
     return allThreads.filter(t => t.filePath === filePath && t.filePath !== GENERAL_THREAD_FILE_PATH);
   }, [allThreads, filePath]);
+  const [showFileForm, setShowFileForm] = useViewState(`diff:${baseRef ?? 'work'}:file-form:${filePath}`, false);
 
   const { anchoredThreads: fileThreads, orphanedThreads, wholeFileThreads } = useMemo(() => {
     const diffLineNumbers = new Set<string>();
@@ -183,6 +189,9 @@ export function FileBlock(props: FileBlockProps) {
     for (const thread of allFileThreads) {
       if (thread.startLine === 0) {
         wholeFile.push(thread);
+        continue;
+      }
+      if (file.trimmed) {
         continue;
       }
       let isInDiff = false;
@@ -246,12 +255,11 @@ export function FileBlock(props: FileBlockProps) {
   }, [isLineInSelection, pendingSelection, filePath, fileThreads]);
 
 
-  const rendersLines = !collapsed && !file.isBinary && file.hunks.length > 0
-    && (!isLargeDiff || largeDiffExpanded || allFileThreads.length > 0);
+  const rendersLines = !collapsed && !sinceViewedOpen && !heldBack && !patchState && !file.isBinary && file.hunks.length > 0;
   const shownSides = useMemo(() => sidesShown(file.hunks), [file.hunks]);
   const wholeFile = !!highlightCode && rendersLines && file.status !== 'added' && file.status !== 'deleted';
   const fetchOld = wholeFile && shownSides.old && (fileLineCount ?? 0) <= HIGHLIGHT_MAX_FILE_LINES;
-  const fetchNew = wholeFile && shownSides.new;
+  const fetchNew = wholeFile && shownSides.new && newFileLineCount(file) <= HIGHLIGHT_MAX_FILE_LINES;
   const oldContent = useQuery({ ...fileContentOptions(fileContentPath, fetchOld, baseRef), staleTime: Infinity });
   const newContent = useQuery({ ...headFileContentOptions(filePath, baseRef), enabled: fetchNew, staleTime: Infinity });
   const contentSettled = (!fetchOld || !oldContent.isPending) && (!fetchNew || !newContent.isPending);
@@ -260,40 +268,7 @@ export function FileBlock(props: FileBlockProps) {
     [contentSettled, oldContent.data, newContent.data],
   );
 
-  const [syntaxMap, setSyntaxMap] = useState<Map<string, SyntaxToken[]> | undefined>(undefined);
-
-  useEffect(() => {
-    if (!highlightCode || !rendersLines) {
-      return;
-    }
-
-    const plan = planSyntaxSources(file.hunks, versions, HIGHLIGHT_MAX_FILE_LINES);
-    const tokens: SideTokens = { old: new Map(), new: new Map() };
-    const work = tokenizeSources(plan.sources, highlightCode, tokens);
-    let cancelled = false;
-    let timer = 0;
-
-    const step = () => {
-      if (cancelled) {
-        return;
-      }
-      const deadline = performance.now() + HIGHLIGHT_BUDGET_MS;
-      while (performance.now() < deadline) {
-        if (work.next().done) {
-          setSyntaxMap(buildSyntaxMap(file.hunks, tokens, plan.full));
-          return;
-        }
-      }
-      timer = window.setTimeout(step, 0);
-    };
-
-    timer = window.setTimeout(step, 0);
-
-    return () => {
-      cancelled = true;
-      window.clearTimeout(timer);
-    };
-  }, [file, highlightCode, rendersLines, versions]);
+  const syntaxMap = useSyntaxMap(highlightCode, rendersLines, file.hunks, versions, HIGHLIGHT_MAX_FILE_LINES);
 
   const gaps = useMemo(() => {
     if (isNewFile) {
@@ -409,11 +384,19 @@ export function FileBlock(props: FileBlockProps) {
 
   const filePendingSelection = pendingSelection && pendingSelection.filePath === filePath ? pendingSelection : null;
 
+  const { sliced, units } = useMemo(() => hunkUnits(file), [file]);
+  const pins = useMemo(() => {
+    const set = new Set(fileThreads.map((thread) => `${thread.side}:${thread.endLine}`));
+    if (filePendingSelection) {
+      set.add(`${filePendingSelection.side}:${filePendingSelection.endLine}`);
+    }
+    return set;
+  }, [fileThreads, filePendingSelection]);
+
   return (
     <div
       className={`border rounded-lg mx-4 my-3 overflow-clip ${highlighted ? 'animate-flash-highlight-border' : 'border-border'}`}
       id={`file-${encodeURIComponent(filePath)}`}
-      data-find-scope={filePath}
       onAnimationEnd={onHighlightEnd}
     >
       <div
@@ -453,17 +436,43 @@ export function FileBlock(props: FileBlockProps) {
         </button>
         {file.status !== 'modified' && <StatusBadge status={file.status} />}
         {file.isBinary && <Badge className="bg-bg-tertiary text-text-muted">Binary</Badge>}
+        {collapsed && heldBack && <Badge className="bg-bg-tertiary text-text-muted">{heldBack.reason}</Badge>}
+        {sinceViewed && (
+          <SinceViewedBadge
+            canDiff={sinceViewed.canDiff}
+            open={sinceViewedOpen}
+            onToggle={() => {
+              onShowSinceViewedChange?.(filePath, !sinceViewedOpen);
+              if (collapsed) {
+                onToggleCollapse(filePath);
+              }
+            }}
+          />
+        )}
         <div className="ml-auto flex items-center gap-2.5 shrink-0">
-          {allFileThreads.length > 0 && (
-            <span className="text-[11px] text-text-muted flex items-center gap-1">
-              <CommentIcon className="w-3 h-3" />
-              {allFileThreads.length}
-              {orphanedThreads.length > 0 && (
-                <ThreadBadge variant="outdated" size="sm">
-                  {orphanedThreads.length} outdated
-                </ThreadBadge>
+          {commentsEnabled && (
+            <button
+              onClick={() => {
+                setShowFileForm(true);
+                if (collapsed) {
+                  onToggleCollapse(filePath);
+                }
+              }}
+              className={cn(
+                'flex items-center gap-1 text-[11px] text-text-muted hover:text-text transition-colors cursor-pointer',
+                allFileThreads.length === 0 && 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100',
               )}
-            </span>
+              title="Comment on this file"
+              aria-label="Comment on this file"
+            >
+              <CommentIcon className="w-3 h-3" />
+              {allFileThreads.length > 0 && allFileThreads.length}
+            </button>
+          )}
+          {orphanedThreads.length > 0 && (
+            <ThreadBadge variant="outdated" size="sm">
+              {orphanedThreads.length} outdated
+            </ThreadBadge>
           )}
           {canPreview && (
             <a
@@ -504,40 +513,53 @@ export function FileBlock(props: FileBlockProps) {
       </div>
       {!collapsed && (
         <div>
-          <OrphanedThreads
-            threads={wholeFileThreads}
-            wholeFile
-            onEditComment={editComment}
-            onDeleteComment={deleteComment}
-            onDeleteThread={deleteThread}
-          />
-          {file.isBinary ? (
+          {commentsEnabled && (
+            <FileComments
+              filePath={filePath}
+              threads={wholeFileThreads}
+              commentActions={commentActions}
+              showForm={showFileForm}
+              onCloseForm={() => setShowFileForm(false)}
+            />
+          )}
+          {sinceViewedOpen && sinceViewed ? (
+            <SinceViewedDiff
+              sessionId={sinceViewed.sessionId}
+              filePath={filePath}
+              version={sinceViewed.version}
+              viewMode={viewMode}
+              highlightCode={highlightCode}
+              onClose={() => onShowSinceViewedChange?.(filePath, false)}
+            />
+          ) : file.isBinary ? (
             <div className="p-4 text-center text-text-muted italic">Binary file not shown</div>
+          ) : heldBack ? (
+            <div className="flex items-center justify-center gap-3 py-6 px-4 text-sm text-text-muted">
+              <span>{heldBack.reason} · {heldBack.rows.toLocaleString()} line{heldBack.rows === 1 ? '' : 's'} not rendered</span>
+              <button
+                className="text-accent hover:underline cursor-pointer font-medium"
+                onClick={heldBack.onLoad}
+              >
+                Load diff
+              </button>
+            </div>
+          ) : patchState === 'loading' ? (
+            <div className="flex items-center justify-center gap-2 py-6 px-4 text-sm text-text-muted">
+              <Spinner className="w-3.5 h-3.5" />
+              Loading diff…
+            </div>
+          ) : patchState === 'error' ? (
+            <div className="p-4 text-center text-text-muted italic">Failed to load the diff</div>
           ) : file.hunks.length === 0 ? (
             <div className="p-4 text-center text-text-muted italic">
               {file.oldMode && file.newMode
                 ? `File mode changed from ${file.oldMode} to ${file.newMode}`
                 : 'No content changes'}
             </div>
-          ) : isLargeDiff && !largeDiffExpanded && allFileThreads.length === 0 ? (
-            <div className="flex items-center justify-center gap-3 py-6 px-4 text-sm text-text-muted">
-              <span>Large diff not rendered ({totalLines} lines)</span>
-              <button
-                className="text-accent hover:underline cursor-pointer font-medium"
-                onClick={() => setLargeDiffExpanded(true)}
-              >
-                Load diff
-              </button>
-            </div>
           ) : (
             <>
-            <OrphanedThreads
-              threads={orphanedThreads}
-              onEditComment={editComment}
-              onDeleteComment={deleteComment}
-              onDeleteThread={deleteThread}
-            />
-            <table className="w-full border-collapse table-fixed">
+            <OrphanedThreads threads={orphanedThreads} commentActions={commentActions} />
+            <table className="w-full border-collapse table-fixed" data-find-scope={filePath}>
               {viewMode === 'split' ? (
                 <colgroup>
                   <col className="w-12.5" />
@@ -553,19 +575,19 @@ export function FileBlock(props: FileBlockProps) {
                   <col />
                 </colgroup>
               )}
-              {file.hunks.map((hunk, i) => {
-                const betweenGap = i > 0 ? gapMap.get(`between-${i - 1}`) : undefined;
+              {units.map(({ hunk, index: i, first, key }) => {
+                const betweenGap = first && i > 0 ? gapMap.get(`between-${i - 1}`) : undefined;
                 const betweenExpansion = betweenGap ? expansions.get(betweenGap.id) : undefined;
-                const topExpansion = i === 0 ? expansions.get('top') : undefined;
+                const topExpansion = first && i === 0 ? expansions.get('top') : undefined;
 
-                return (
+                const block = (
                   <HunkWithGap
-                    key={i}
+                    key={key}
                     hunk={hunk}
                     viewMode={viewMode}
                     syntaxMap={syntaxMap}
-                    expandControls={getExpandControlsForHunk(i)}
-                    topExpansionLines={i === 0 ? [...(topExpansion?.linesFromTop ?? []), ...(topExpansion?.linesFromBottom ?? [])] : undefined}
+                    expandControls={first ? getExpandControlsForHunk(i) : undefined}
+                    topExpansionLines={first && i === 0 ? [...(topExpansion?.linesFromTop ?? []), ...(topExpansion?.linesFromBottom ?? [])] : undefined}
                     gapExpansion={betweenExpansion}
                     gapId={betweenGap?.id}
                     highlightCode={highlightCode}
@@ -589,6 +611,11 @@ export function FileBlock(props: FileBlockProps) {
                     getOriginalCode={getOriginalCode}
                   />
                 );
+                return sliced ? (
+                  <LazySlice key={`${viewMode}:${key}`} rows={sliceRowCount(hunk.lines, viewMode === 'split') + (first ? 1 : 0)} pinned={isPinnedSlice(hunk.lines, pins, pinnedLines)}>
+                    {block}
+                  </LazySlice>
+                ) : block;
               })}
               {bottomGap && (() => {
                 const bottomExpansion = expansions.get('bottom');

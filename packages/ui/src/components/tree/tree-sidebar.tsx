@@ -30,6 +30,8 @@ interface TreeSidebarProps {
   activeFile: string | null;
   commentCountsByFile: Map<string, number>;
   statuses?: Record<string, WorkingTreeStatus>;
+  /** Files and folders `.diffityignore` hides from diffs, shown dimmed. */
+  diffHidden?: Set<string>;
   repoRoot: string;
   editor: boolean;
   onFileClick: (path: string) => void;
@@ -54,6 +56,7 @@ export const TreeSidebar = forwardRef<HTMLInputElement, TreeSidebarProps>(functi
     activeFile,
     commentCountsByFile,
     statuses,
+    diffHidden,
     repoRoot,
     editor,
     onFileClick,
@@ -301,6 +304,7 @@ export const TreeSidebar = forwardRef<HTMLInputElement, TreeSidebarProps>(functi
               threadCount={commentCountsByFile.get(node.path) ?? 0}
               status={statuses?.[node.path]}
               changed={changedDirs.has(node.path)}
+              diffHidden={diffHidden?.has(node.path)}
               menuOpen={menu?.path === node.path}
               onToggleDir={handleExpandDir}
               onCollapseDir={handleCollapseDir}

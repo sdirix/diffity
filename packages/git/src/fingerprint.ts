@@ -2,7 +2,8 @@ import { createHash, type Hash } from 'node:crypto';
 import { lstatSync } from 'node:fs';
 import { join } from 'node:path';
 import { normalizeRef, resolveHeadRef, WORKING_TREE_REFS } from './diff.js';
-import { getRepoRoot, gitNul } from './exec.js';
+import { loadDiffIgnore, type DiffIgnore, type DiffOptions } from './diffignore.js';
+import { getRepoRoot, gitNul, gitTry } from './exec.js';
 import { FIELDS_BEFORE_PATH } from './status.js';
 
 /**
@@ -30,13 +31,20 @@ function statKey(root: string, path: string): string {
   return stat ? `${stat.size}:${stat.mtimeNs}` : '-';
 }
 
+/** The commit checked out in the submodule at `path`, which its status record leaves out. */
+function submoduleHead(root: string, path: string): string {
+  return gitTry(['rev-parse', '--verify', '--quiet', 'HEAD'], { cwd: join(root, path) })?.trim() ?? '-';
+}
+
 /**
  * Feeds `hash` with HEAD, the branch and the `git status` record of each
  * changed path in `scope`, which holds its index state, plus the size and
- * mtime of each changed or untracked file. A file that changes again keeps
- * its status but not its mtime.
+ * mtime of each changed or untracked file and the commit of a submodule
+ * that moved. A file that changes again keeps its status but not its
+ * mtime. Of the paths `rules` hide only the names count, which make up
+ * the hidden files of the diff.
  */
-function hashStatus(hash: Hash, scope: Scope): void {
+function hashStatus(hash: Hash, scope: Scope, rules?: DiffIgnore): void {
   const root = getRepoRoot();
   const records = gitNul([
     'status', '--porcelain=v2', '-z', '--branch', '--no-ahead-behind', '--no-renames', '--untracked-files=all',
@@ -55,26 +63,36 @@ function hashStatus(hash: Hash, scope: Scope): void {
       continue;
     }
     const path = kind === '?' ? record.slice(2) : fields.slice(FIELDS_BEFORE_PATH[kind]).join(' ');
+    if (rules?.isIgnored(path)) {
+      hash.update(`hidden\0${path}\0`);
+      continue;
+    }
     if (scope === 'staged') {
       hash.update(`${kind === '1' ? `${xy[0]} ${fields[4]} ${fields[7]} ${path}` : record}\0`);
       continue;
     }
     hash.update(`${record}\0${statKey(root, path)}\0`);
+    if (kind !== '?' && fields[2].startsWith('SC')) {
+      hash.update(`${submoduleHead(root, path)}\0`);
+    }
   }
 }
 
 /**
  * Cheap change detector for the diff of `ref`. Read it before the diff, so
  * an edit landing in between makes the diff stale instead of being missed.
- * A range only depends on the commits it resolves to.
+ * A range only depends on the commits it resolves to and the
+ * `.diffityignore` rules, and files those rules hide never count.
  */
-export function getDiffFingerprint(ref: string): string {
+export function getDiffFingerprint(ref: string, options: DiffOptions = {}): string {
   const hash = createHash('sha1');
+  const rules = loadDiffIgnore(options);
+  hash.update(`${rules.hash}\0`);
   if (!WORKING_TREE_REFS.has(ref)) {
     hash.update(`${normalizeRef(ref)}\0`);
   }
   if (resolveHeadRef(ref).type !== 'ref') {
-    hashStatus(hash, ref === 'staged' ? 'staged' : ref === 'unstaged' ? 'unstaged' : 'all');
+    hashStatus(hash, ref === 'staged' ? 'staged' : ref === 'unstaged' ? 'unstaged' : 'all', rules);
   }
   return hash.digest('hex');
 }

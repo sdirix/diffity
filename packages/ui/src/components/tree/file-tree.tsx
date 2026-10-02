@@ -23,6 +23,8 @@ interface FileTreeProps {
   search: string;
   activeFile: string | null;
   reviewedFiles: Set<string>;
+  /** Files that changed after they were marked viewed. */
+  changedSinceViewed: Set<string>;
   commentCountsByFile: Map<string, number>;
   commentedFilesOnly: boolean;
   /** Lists the files by path in diff order instead of as a tree. */
@@ -44,6 +46,7 @@ export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileT
     search,
     activeFile,
     reviewedFiles,
+    changedSinceViewed,
     commentCountsByFile,
     commentedFilesOnly,
     flat = false,
@@ -158,6 +161,7 @@ export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileT
             node={node}
             active={activeFile === node.path}
             reviewed={reviewedFiles.has(node.path)}
+            changedSinceViewed={changedSinceViewed.has(node.path)}
             threadCount={commentCountsByFile.get(node.path) ?? 0}
             menuOpen={menuPath === node.path}
             onFileClick={onFileClick}
@@ -181,6 +185,7 @@ export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileT
           expanded={effectiveExpandedDirs.has(node.path)}
           active={activeFile === node.path}
           reviewed={reviewedFiles.has(node.path)}
+          changedSinceViewed={changedSinceViewed.has(node.path)}
           threadCount={commentCountsByFile.get(node.path) ?? 0}
           menuOpen={menuPath === node.path}
           onToggleDir={handleToggleDir}

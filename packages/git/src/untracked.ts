@@ -13,7 +13,7 @@ const C_ESCAPES: Record<string, string> = {
 };
 
 /** `prefix` and `name` quoted the way git quotes them with `core.quotepath` off. */
-function quoteName(prefix: string, name: string): string {
+export function quoteName(prefix: string, name: string): string {
   const full = prefix + name;
   if (!full.match(QUOTED_CHARS)) {
     return full;

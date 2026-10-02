@@ -150,13 +150,29 @@ const MIGRATIONS: ((db: DatabaseSync) => void)[] = [
     CREATE INDEX IF NOT EXISTS idx_tour_steps_tour ON tour_steps(tour_id);
   `),
   // Sessions are keyed by (ref, scope) instead of (ref, head_hash). Older rows keep a NULL scope
-  // until a branch adopts them, see `findOrCreateSession`. Empty ones only marked a visited HEAD.
+  // until a branch adopts them, see `findOrCreateSession`. All of them stay, as an older diffity
+  // that still runs may hold one and write comments to it.
   (db) => db.exec(`
     ALTER TABLE review_sessions ADD COLUMN scope TEXT;
     CREATE UNIQUE INDEX idx_sessions_ref_scope ON review_sessions(ref, scope);
-    DELETE FROM review_sessions
-    WHERE NOT EXISTS (SELECT 1 FROM comment_threads WHERE session_id = review_sessions.id)
-      AND NOT EXISTS (SELECT 1 FROM tours WHERE session_id = review_sessions.id);
+  `),
+  // Files marked viewed per session. `blob` is the file's new side when it was marked, NULL when it had
+  // none, and `kept` whether that blob was stored as text to diff against once the file changes.
+  (db) => db.exec(`
+    CREATE TABLE viewed_files (
+      session_id TEXT NOT NULL REFERENCES review_sessions(id) ON DELETE CASCADE,
+      file_path TEXT NOT NULL,
+      blob TEXT,
+      kept INTEGER NOT NULL DEFAULT 0,
+      viewed_at TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (session_id, file_path)
+    );
+  `),
+  // A single ref is diffed from its merge base with HEAD against the working tree, so its view is branch
+  // relative. Its sessions shared by every branch go back to having no scope, for their branch to adopt.
+  (db) => db.exec(`
+    UPDATE review_sessions SET scope = NULL
+    WHERE scope = '' AND ref <> '__tree__' AND instr(ref, '..') = 0;
   `),
 ];
 

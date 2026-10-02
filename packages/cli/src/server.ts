@@ -3,17 +3,15 @@ import {
   type IncomingMessage,
   type ServerResponse,
 } from 'node:http';
-import { execSync, execFile } from 'node:child_process';
 import { readFileSync, existsSync } from 'node:fs';
 import { join, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { dirname } from 'node:path';
 import { parseDiff, type ParsedDiff } from '@diffity/parser';
 import {
-  getDiff,
   getDiffFingerprint,
-  getUntrackedFiles,
-  getUntrackedDiff,
+  getFilteredDiff,
+  getRefDiff,
   getRepoInfo,
   getFileContent,
   getIndexFileContent,
@@ -23,7 +21,6 @@ import {
   resolveBaseRef,
   resolveHeadRef,
   resolveDiffArgs,
-  resolveRef,
   revertFile,
   revertHunk,
   getRefCapabilities,
@@ -36,8 +33,8 @@ import {
   getWorkingTreeRawFile,
   WORKING_TREE_REFS,
   InputError,
-  assertRepoPath,
   type BaseSource,
+  type DiffOptions,
 } from '@diffity/git';
 import {
   detectRemote as detectGitHubRemote,
@@ -52,7 +49,13 @@ import { transaction } from './db.js';
 import { handleReviewRoute } from './review-routes.js';
 import { handleTourRoute } from './tour-routes.js';
 import { handleRefRoute } from './ref-routes.js';
+import { handleRepoThreadRoute } from './repo-thread-routes.js';
 import { handleTreeStatusRoute } from './tree-status-routes.js';
+import { handleDiffIgnoreRoute } from './diff-ignore-routes.js';
+import { handleDiffFileRoute, LARGE_FILE_PATCH_LENGTH } from './diff-file-routes.js';
+import { handleViewedRoute } from './viewed-routes.js';
+import { handleSettingsRoute } from './settings-routes.js';
+import { editorCapability, handleEditorRoute } from './editor-routes.js';
 import { sendJson, sendError, readBody } from './http-utils.js';
 import {
   registerInstance,
@@ -136,6 +139,11 @@ function decodePathParam(pathname: string, prefix: string): string {
   }
 }
 
+/** `?hidden=1` shows the files `.diffityignore` hides. */
+function diffOptionsFrom(url: URL): DiffOptions {
+  return { showHidden: url.searchParams.get('hidden') === '1' };
+}
+
 function descriptionForRef(ref: string): string {
   if (WORKING_TREE_REFS.has(ref)) {
     const labels: Record<string, string> = {
@@ -183,31 +191,12 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
   }
 
   /** The fingerprint of the diff `/api/diff` returns for `ref`, read before the diff itself. */
-  function fingerprintFor(ref: string | null): string {
-    return getDiffFingerprint(ref || diffArgs[0] || 'work');
-  }
-
-  function getFullDiff(args: string[]): string {
-    let raw = getDiff(args);
-    if (includeUntracked) {
-      const untrackedFiles = getUntrackedFiles();
-      if (untrackedFiles.length > 0) {
-        raw += '\n' + getUntrackedDiff(untrackedFiles);
-      }
-    }
-    return raw;
+  function fingerprintFor(ref: string | null, options: DiffOptions): string {
+    return getDiffFingerprint(ref || diffArgs[0] || 'work', options);
   }
 
   const githubRemote = detectGitHubRemote();
   const uiDir = join(__dirname, 'ui/client');
-
-  let editorAvailable: 'vscode' | null = null;
-  try {
-    execSync('which code', { stdio: 'pipe' });
-    editorAvailable = 'vscode';
-  } catch {
-    // VS Code CLI not found
-  }
 
   const server = createServer(
     async (req: IncomingMessage, res: ServerResponse) => {
@@ -264,40 +253,6 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
           return;
         }
 
-        if (pathname === '/api/open-in-editor' && req.method === 'POST') {
-          if (!editorAvailable) {
-            sendError(res, 404, 'No editor available');
-            return;
-          }
-          try {
-            const body = JSON.parse(await readBody(req));
-            const { filePath, line } = body;
-            if (typeof filePath !== 'string') {
-              sendError(res, 400, 'Missing filePath');
-              return;
-            }
-            if (line !== undefined && line !== null && !(Number.isInteger(line) && line > 0)) {
-              sendError(res, 400, 'Invalid line');
-              return;
-            }
-            if (filePath) {
-              assertRepoPath(filePath);
-            }
-            const repoRoot = getRepoInfo().root;
-            const fullPath = filePath ? join(repoRoot, filePath) : repoRoot;
-            const gotoArg = line ? `${fullPath}:${line}` : fullPath;
-            execFile('code', [repoRoot, '--goto', gotoArg], { timeout: 5000 }, () => {});
-            sendJson(res, { ok: true });
-          } catch (err) {
-            if (err instanceof InputError) {
-              sendError(res, 400, err.message);
-              return;
-            }
-            sendError(res, 500, `Failed to open editor: ${err}`);
-          }
-          return;
-        }
-
         if (pathname === '/api/commits') {
           const count = parseInt(url.searchParams.get('count') || '10', 10);
           const skip = parseInt(url.searchParams.get('skip') || '0', 10);
@@ -312,7 +267,7 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
         }
 
         if (pathname === '/api/diff-fingerprint') {
-          sendJson(res, { fingerprint: fingerprintFor(url.searchParams.get('ref')) });
+          sendJson(res, { fingerprint: fingerprintFor(url.searchParams.get('ref'), diffOptionsFrom(url)) });
           return;
         }
 
@@ -331,23 +286,18 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
 
         if (pathname === '/api/diff') {
           const ref = url.searchParams.get('ref');
-          const fingerprint = fingerprintFor(ref);
+          const diffOptions = diffOptionsFrom(url);
+          const fingerprint = fingerprintFor(ref, diffOptions);
           const whitespace = url.searchParams.get('whitespace');
           const extraArgs = whitespace === 'hide' ? ['-w'] : [];
           const base = resolveBaseRef(ref || 'work');
-
-          if (ref) {
-            sendJson(res, {
-              ...enrichWithLineCounts(parseDiff(resolveRef(ref, extraArgs)), base),
-              fingerprint,
-            });
-            return;
-          }
-
-          const args = whitespace === 'hide' ? [...diffArgs, '-w'] : diffArgs;
+          const { patch, hiddenFiles } = ref
+            ? getRefDiff(ref, extraArgs, diffOptions)
+            : getFilteredDiff([...diffArgs, ...extraArgs], includeUntracked, diffOptions);
           sendJson(res, {
-            ...enrichWithLineCounts(parseDiff(getFullDiff(args)), base),
+            ...enrichWithLineCounts(parseDiff(patch, { maxFilePatchLength: LARGE_FILE_PATCH_LENGTH }), base),
             fingerprint,
+            hiddenFiles,
           });
           return;
         }
@@ -389,7 +339,7 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
             capabilities,
             sessionId,
             github: githubRemote,
-            editor: editorAvailable,
+            editor: editorCapability(),
           });
           return;
         }
@@ -566,7 +516,7 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
             capabilities: { reviews: true, revert: false, staleness: false },
             sessionId: session.id,
             github: githubRemote,
-            editor: editorAvailable,
+            editor: editorCapability(),
           });
           return;
         }
@@ -583,7 +533,31 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
           return;
         }
 
+        if (handleRepoThreadRoute(req, res, pathname, url)) {
+          return;
+        }
+
         if (handleTreeStatusRoute(req, res, pathname)) {
+          return;
+        }
+
+        if (handleDiffIgnoreRoute(req, res, pathname)) {
+          return;
+        }
+
+        if (handleDiffFileRoute(req, res, pathname, url)) {
+          return;
+        }
+
+        if (await handleViewedRoute(req, res, pathname, url)) {
+          return;
+        }
+
+        if (await handleSettingsRoute(req, res, pathname)) {
+          return;
+        }
+
+        if (await handleEditorRoute(req, res, pathname)) {
           return;
         }
 

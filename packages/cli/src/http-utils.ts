@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { InputError } from '@diffity/git';
 
 export function sendJson(res: ServerResponse, data: unknown) {
   res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -19,9 +20,18 @@ export function readBody(req: IncomingMessage): Promise<string> {
   });
 }
 
-export async function parseJsonBody(req: IncomingMessage): Promise<Record<string, unknown>> {
-  const raw = await readBody(req);
-  return JSON.parse(raw);
+/** The JSON object of the body, `InputError` for anything else. */
+export async function readJsonObject(req: IncomingMessage): Promise<Record<string, unknown>> {
+  let body: unknown;
+  try {
+    body = JSON.parse(await readBody(req));
+  } catch {
+    throw new InputError('Invalid JSON');
+  }
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    throw new InputError('Expected an object');
+  }
+  return body as Record<string, unknown>;
 }
 
 export function withJsonBody(

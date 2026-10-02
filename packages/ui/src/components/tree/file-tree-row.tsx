@@ -52,8 +52,8 @@ function fileRowClass(active: boolean, menuOpen: boolean, reviewed: boolean) {
   );
 }
 
-function FileBadges(props: { threadCount: number; reviewed: boolean }) {
-  const { threadCount, reviewed } = props;
+function FileBadges(props: { threadCount: number; reviewed: boolean; changedSinceViewed: boolean }) {
+  const { threadCount, reviewed, changedSinceViewed } = props;
 
   return (
     <>
@@ -65,6 +65,9 @@ function FileBadges(props: { threadCount: number; reviewed: boolean }) {
           <CommentIcon className="w-3 h-3" />
           <span className="text-[10px] font-semibold leading-none">{threadCount}</span>
         </span>
+      )}
+      {changedSinceViewed && (
+        <span className="w-1.5 h-1.5 shrink-0 rounded-full bg-modified" title="Changed since viewed" />
       )}
       {reviewed && (
         <span className="text-added text-[10px] shrink-0" title="Viewed">&#10003;</span>
@@ -79,11 +82,15 @@ interface FileTreeRowProps {
   expanded: boolean;
   active: boolean;
   reviewed?: boolean;
+  /** Changed after it was marked viewed. */
+  changedSinceViewed?: boolean;
   threadCount: number;
   /** Working tree status of a file. */
   status?: WorkingTreeStatus;
   /** A folder with changed files inside. */
   changed?: boolean;
+  /** Hidden from diffs by `.diffityignore`. */
+  diffHidden?: boolean;
   /** Its context menu is open. */
   menuOpen?: boolean;
   onToggleDir: (path: string) => void;
@@ -100,9 +107,11 @@ export function FileTreeRow(props: FileTreeRowProps) {
     expanded,
     active,
     reviewed = false,
+    changedSinceViewed = false,
     threadCount,
     status,
     changed = false,
+    diffHidden = false,
     menuOpen = false,
     onToggleDir,
     onCollapseDir,
@@ -111,6 +120,7 @@ export function FileTreeRow(props: FileTreeRowProps) {
   } = props;
   const paddingLeft = depth * 12 + 8;
   const menuHandlers = menuHandlersFor(node, onMenu);
+  const hiddenTitle = diffHidden ? `${node.path}, hidden from diffs by .diffityignore` : undefined;
 
   if (node.type === 'dir') {
     const handleChevronClick = (e: React.MouseEvent) => {
@@ -127,13 +137,16 @@ export function FileTreeRow(props: FileTreeRowProps) {
         className={cn('flex items-center gap-1.5 w-full h-7 pr-2 text-left text-[13px] hover:bg-hover cursor-pointer', menuOpen && 'bg-hover')}
         style={{ paddingLeft: `${paddingLeft}px` }}
         onClick={() => onToggleDir(node.path)}
+        title={hiddenTitle}
         {...menuHandlers}
       >
         <span onClick={handleChevronClick} className="relative flex items-center rounded p-0.5 hover:bg-border/70 transition-colors">
           <ChevronIcon expanded={expanded} />
         </span>
-        <FolderIcon open={expanded} />
-        <span className="truncate text-text">{node.name}</span>
+        <span className={cn('contents', diffHidden && '[&>*]:opacity-50')}>
+          <FolderIcon open={expanded} />
+          <span className="truncate text-text">{node.name}</span>
+        </span>
         {changed && (
           <span className="ml-auto mr-1 w-1.5 h-1.5 shrink-0 rounded-full bg-modified" title="Contains changes" />
         )}
@@ -148,13 +161,14 @@ export function FileTreeRow(props: FileTreeRowProps) {
       className={fileRowClass(active, menuOpen, reviewed)}
       style={{ paddingLeft: `${paddingLeft + 15}px` }}
       onClick={() => onFileClick(node.path)}
+      title={hiddenTitle}
       {...menuHandlers}
     >
-      {node.file ? <StatusBadge status={node.file.status} compact /> : <FileIcon className="w-4 h-4 shrink-0 text-text-muted" />}
-      <span className={cn('flex-1 min-w-0 truncate text-text', reviewed && 'line-through')}>
+      {node.file ? <StatusBadge status={node.file.status} compact /> : <FileIcon className={cn('w-4 h-4 shrink-0 text-text-muted', diffHidden && 'opacity-50')} />}
+      <span className={cn('flex-1 min-w-0 truncate text-text', reviewed && 'line-through', diffHidden && 'opacity-50')}>
         {node.name}
       </span>
-      <FileBadges threadCount={threadCount} reviewed={reviewed} />
+      <FileBadges threadCount={threadCount} reviewed={reviewed} changedSinceViewed={changedSinceViewed} />
       {statusInfo && (
         <span className={cn('w-3 shrink-0 text-center font-mono text-[11px] font-semibold', statusInfo.className)} title={statusInfo.label}>
           {statusInfo.letter}
@@ -168,6 +182,8 @@ interface FlatFileRowProps {
   node: FileNode;
   active: boolean;
   reviewed: boolean;
+  /** Changed after it was marked viewed. */
+  changedSinceViewed: boolean;
   threadCount: number;
   menuOpen?: boolean;
   onFileClick: (path: string) => void;
@@ -176,7 +192,7 @@ interface FlatFileRowProps {
 
 /** A file of a flat list, its name followed by its folder. */
 export function FlatFileRow(props: FlatFileRowProps) {
-  const { node, active, reviewed, threadCount, menuOpen = false, onFileClick, onMenu } = props;
+  const { node, active, reviewed, changedSinceViewed, threadCount, menuOpen = false, onFileClick, onMenu } = props;
   const slash = node.path.lastIndexOf('/');
   const dir = slash > 0 ? node.path.slice(0, slash) : '';
 
@@ -196,7 +212,7 @@ export function FlatFileRow(props: FlatFileRowProps) {
           </span>
         )}
       </span>
-      <FileBadges threadCount={threadCount} reviewed={reviewed} />
+      <FileBadges threadCount={threadCount} reviewed={reviewed} changedSinceViewed={changedSinceViewed} />
     </button>
   );
 }

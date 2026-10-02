@@ -10,7 +10,9 @@ import { KeyboardIcon } from '../icons/keyboard-icon';
 import { ContrastIcon } from '../icons/contrast-icon';
 import { GitBranchIcon } from '../icons/git-branch-icon';
 import { GitHubIcon } from '../icons/github-icon';
+import { CommentIcon } from '../icons/comment-icon';
 import { DiffStats } from '../diff/diff-stats';
+import { HiddenFilesChip } from '../diff/hidden-files-chip';
 import { GitHubDialog } from './github-dialog';
 import { CommentToolbarActions } from '../comments/comment-toolbar-actions';
 import { OptionsMenu, menuItemClass } from './options-menu';
@@ -23,6 +25,7 @@ import { isThreadResolved } from '../comments/types';
 import { shortcutHint } from '../../lib/shortcuts';
 import { usePaletteActions, type PaletteAction } from '../../hooks/use-palette';
 import { setDiffPalette, useDiffPalette } from '../../lib/diff-palette';
+import { cn } from '../../lib/cn';
 
 interface ToolbarProps {
   viewMode: ViewMode;
@@ -44,6 +47,9 @@ interface ToolbarProps {
   githubDetails?: { prNumber: number; prTitle: string; prUrl: string; prCreatedAt: string; headSha: string; commentCount: number } | null;
   sessionId?: string | null;
   onGitHubPulled?: () => void;
+  hiddenFiles?: { files: string[]; showing: boolean; onShowingChange: (showing: boolean) => void };
+  /** Shows the comments panel toggle when set. */
+  commentsPanel?: { open: boolean; openCount: number; onToggle: () => void };
 }
 
 function extractCodeContext(diff: ParsedDiff | undefined, filePath: string, side: 'old' | 'new', startLine: number, endLine: number): string[] {
@@ -86,6 +92,8 @@ function formatThreadsForCopy(threads: CommentThread[], diff?: ParsedDiff, diffR
   for (const thread of unresolvedThreads) {
     if (thread.filePath === GENERAL_THREAD_FILE_PATH) {
       parts.push('## General comment');
+    } else if (thread.startLine === 0) {
+      parts.push(`## ${thread.filePath} (whole file)`);
     } else {
       const lineRange = thread.startLine === thread.endLine
         ? `${thread.startLine}`
@@ -139,6 +147,8 @@ export function Toolbar(props: ToolbarProps) {
     githubDetails,
     sessionId,
     onGitHubPulled,
+    hiddenFiles,
+    commentsPanel,
   } = props;
   const [showGitHub, setShowGitHub] = useState(false);
   const diffPalette = useDiffPalette();
@@ -182,6 +192,7 @@ export function Toolbar(props: ToolbarProps) {
             </span>
           </span>
         )}
+        {hiddenFiles && <HiddenFilesChip {...hiddenFiles} />}
         {githubDetails && (
           <button
             onClick={() => setShowGitHub(true)}
@@ -200,6 +211,23 @@ export function Toolbar(props: ToolbarProps) {
           onDeleteAllComments={onDeleteAllComments}
           formatForCopy={formatForCopy}
         />
+        {commentsPanel && (
+          <button
+            onClick={commentsPanel.onToggle}
+            className={cn(
+              'flex items-center gap-1.5 px-2 py-1 rounded-md text-xs transition-colors cursor-pointer',
+              commentsPanel.open
+                ? 'bg-accent/15 text-accent'
+                : 'bg-bg-tertiary text-text-secondary hover:bg-hover hover:text-text',
+            )}
+            title={`${commentsPanel.open ? 'Hide' : 'Show'} comments panel (${shortcutHint('comments-panel')})`}
+            aria-pressed={commentsPanel.open}
+            aria-label={`Comments panel, ${commentsPanel.openCount} open`}
+          >
+            <CommentIcon className="w-3.5 h-3.5" />
+            <span className="tabular-nums">{commentsPanel.openCount}</span>
+          </button>
+        )}
         <OptionsMenu
           theme={theme}
           onToggleTheme={onToggleTheme}

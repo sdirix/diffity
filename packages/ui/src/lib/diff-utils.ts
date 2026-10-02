@@ -50,10 +50,9 @@ const LOCK_FILES = new Set([
   'shrinkwrap.yaml',
 ]);
 
+const MINIFIED_PATH = /\.min\.(js|mjs|cjs|css)$/i;
+
 const GENERATED_EXTENSIONS = [
-  '.min.js',
-  '.min.css',
-  '.min.mjs',
   '.bundle.js',
   '.bundle.css',
   '.chunk.js',
@@ -75,12 +74,20 @@ const GENERATED_PATTERNS = [
   /build\//,
   /generated\//,
   /__generated__\//,
-  /\.lock$/,
 ];
 
 const AUTO_COLLAPSE_LINE_THRESHOLD = 1000;
 
-function getTotalLineCount(file: DiffFile): number {
+/** Lines of the new version of a modified file, from the old version's and the changed lines. 0 when the old count is unknown. */
+export function newFileLineCount(file: DiffFile): number {
+  return file.oldFileLineCount === undefined ? 0 : file.oldFileLineCount + file.additions - file.deletions;
+}
+
+/** Lines of the file's hunks, or its changed lines when it came without hunks (`trimmed`). */
+export function getRowCount(file: DiffFile): number {
+  if (file.trimmed) {
+    return file.additions + file.deletions;
+  }
   let count = 0;
   for (const hunk of file.hunks) {
     count += hunk.lines.length;
@@ -88,36 +95,67 @@ function getTotalLineCount(file: DiffFile): number {
   return count;
 }
 
-function isAutoCollapsible(file: DiffFile): boolean {
-  if (file.status === 'deleted' || file.status === 'renamed') {
-    return true;
-  }
+/** Files with at least this many lines wait for "Load diff". */
+export const DEFER_ROW_THRESHOLD = 200;
+/** Lines this long on average mark minified code. */
+export const MINIFIED_AVERAGE_LINE_LENGTH = 500;
 
-  if (getTotalLineCount(file) >= AUTO_COLLAPSE_LINE_THRESHOLD) {
-    return true;
+function averageLineLength(file: DiffFile): number {
+  let lines = 0;
+  let length = 0;
+  for (const hunk of file.hunks) {
+    for (const line of hunk.lines) {
+      lines++;
+      length += line.content.length;
+    }
   }
+  return lines === 0 ? 0 : length / lines;
+}
 
+function isGeneratedPath(path: string): boolean {
+  const lowerPath = path.toLowerCase();
+  return GENERATED_EXTENSIONS.some((ext) => lowerPath.endsWith(ext)) || GENERATED_PATTERNS.some((pattern) => pattern.test(path));
+}
+
+const reasons = new WeakMap<DiffFile, string | null>();
+
+function findDeferReason(file: DiffFile): string | null {
+  if (file.isBinary || (!file.trimmed && file.hunks.length === 0)) {
+    return null;
+  }
   const path = getFilePath(file);
   const fileName = path.split('/').pop() || '';
-
-  if (LOCK_FILES.has(fileName)) {
-    return true;
+  if (LOCK_FILES.has(fileName) || fileName.endsWith('.lock')) {
+    return 'Lock file';
   }
-
-  const lowerPath = path.toLowerCase();
-  for (const ext of GENERATED_EXTENSIONS) {
-    if (lowerPath.endsWith(ext)) {
-      return true;
-    }
+  if (MINIFIED_PATH.test(path) || averageLineLength(file) >= MINIFIED_AVERAGE_LINE_LENGTH) {
+    return 'Minified';
   }
-
-  for (const pattern of GENERATED_PATTERNS) {
-    if (pattern.test(path)) {
-      return true;
-    }
+  if (isGeneratedPath(path)) {
+    return 'Generated';
   }
+  if (file.trimmed || getRowCount(file) >= DEFER_ROW_THRESHOLD) {
+    return 'Large diff';
+  }
+  return null;
+}
 
-  return false;
+/**
+ * Why a file waits for "Load diff": a lock, minified or generated file
+ * whatever its size, or any other file with many lines. `null` renders it
+ * right away.
+ */
+export function deferReason(file: DiffFile): string | null {
+  let reason = reasons.get(file);
+  if (reason === undefined) {
+    reason = findDeferReason(file);
+    reasons.set(file, reason);
+  }
+  return reason;
+}
+
+function isAutoCollapsible(file: DiffFile): boolean {
+  return file.status === 'deleted' || file.status === 'renamed' || getRowCount(file) >= AUTO_COLLAPSE_LINE_THRESHOLD;
 }
 
 export function getAutoCollapsedPaths(files: DiffFile[]): Set<string> {

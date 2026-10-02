@@ -23,6 +23,7 @@ import { registerUpdateCommand } from './commands/update.js';
 import { registerDoctorCommand } from './commands/doctor.js';
 import { registerTreeCommand } from './commands/tree.js';
 import { registerKillCommand } from './commands/kill.js';
+import { registerConfigCommand } from './commands/config.js';
 import { SKILLS_HASH } from './generated/skills-hash.js';
 
 const require = createRequire(import.meta.url);
@@ -43,8 +44,8 @@ program
   .option('--port <port>', 'Port to use (default: auto-assigned from 5391)', '5391')
   .option('--no-open', 'Do not open browser automatically')
   .option('--quiet', 'Minimal terminal output')
-  .option('--dark', 'Open in dark mode (default: light)')
-  .option('--unified', 'Open in unified view (default: split)')
+  .option('--dark', 'Open in dark mode if the theme setting is System')
+  .option('--unified', 'Open in unified view (default: layout setting)')
   .option('--new', 'Stop existing instance and start fresh')
   .addHelpText('after', `
 Common usage:
@@ -65,6 +66,7 @@ Other commands:
   $ diffity tree --dark                  Browse in dark mode
   $ diffity list                         List running instances
   $ diffity kill                         Stop all running instances
+  $ diffity config editor "<command>"    Set the custom editor command
   $ diffity prune                        Remove all diffity data
 
 The --base/--compare flags are optional — positional args and
@@ -342,6 +344,7 @@ registerUpdateCommand(program, pkg.version, SKILLS_HASH);
 registerDoctorCommand(program, pkg.version);
 registerTreeCommand(program, pkg.version);
 registerKillCommand(program);
+registerConfigCommand(program);
 registerAgentCommands(program);
 
 program.parse();

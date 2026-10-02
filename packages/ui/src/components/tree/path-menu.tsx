@@ -1,7 +1,7 @@
 import { ContextMenu, ContextMenuItem, ContextMenuSeparator, type MenuPosition } from '../ui/context-menu';
 import { absolutePath, copyFileContents } from '../../lib/file-copy';
 import { copyWithToast, openInEditorWithToast } from '../../lib/toast';
-import { VscodeIcon } from '../icons/vscode-icon';
+import { CodeIcon } from '../icons/code-icon';
 import { CopyIcon } from '../icons/copy-icon';
 import { FileIcon } from '../icons/file-icon';
 import { CommentIcon } from '../icons/comment-icon';
@@ -37,7 +37,7 @@ export function PathMenu(props: PathMenuProps) {
       {editor && !deleted && (
         <>
           <ContextMenuItem
-            icon={<VscodeIcon className={iconClass} />}
+            icon={<CodeIcon className={iconClass} />}
             label="Open in editor"
             onSelect={() => void openInEditorWithToast(path)}
           />

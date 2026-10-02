@@ -6,6 +6,7 @@ import NProgress from "nprogress";
 import { queryClient } from "./lib/query-client";
 import { ErrorPage } from "./components/error-page";
 import { CommandPalette } from "./components/layout/command-palette";
+import { SettingsDialog } from "./components/settings/settings-dialog";
 import { PageSkeleton } from "./components/layout/skeleton";
 import { APPLY_STORED_COLOURS } from "./lib/preferences";
 import "./lib/diff-palette";
@@ -62,6 +63,7 @@ export default function App() {
       <NavigationProgress />
       <Outlet />
       <CommandPalette />
+      <SettingsDialog />
       <Toaster
         position="bottom-right"
         gap={8}

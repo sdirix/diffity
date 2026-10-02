@@ -7,7 +7,6 @@ import {
   getDiffityDir,
   getHeadHash,
   isAncestor,
-  verifyCommit,
   WORKING_TREE_REFS,
 } from '@diffity/git';
 import { getDb, queryAll, queryOne, transaction } from './db.js';
@@ -39,23 +38,18 @@ function sessionFilePath(ref: string): string {
   return join(getDiffityDir(), ref === TREE_REF ? 'current-tree-session' : 'current-session');
 }
 
-const COMMIT_HASH = /^[0-9a-f]{7,40}$/i;
-
 function mentionsHead(ref: string): boolean {
   return ref.split(/[^A-Za-z0-9]/).includes('HEAD') || /(^|\.\.)@($|[~^{.])/.test(ref);
 }
 
-function isTag(name: string): boolean {
-  return verifyCommit(`refs/tags/${name}`) !== null;
-}
-
 /**
  * Whether the diff of `ref` depends on the checked out branch: the working
- * tree views, a branch diffed against the working tree, and any ref or range
- * that names HEAD or leaves an end out. Commit hashes, tags, ranges between
- * named commits and the file browser read the same on every branch.
+ * tree views, any single ref, which is diffed from its merge base with HEAD
+ * against the working tree, and a range that names HEAD or leaves an end
+ * out. Ranges between two named commits and the file browser read the same
+ * on every branch.
  */
-export function isBranchRelative(ref: string, tagExists: (name: string) => boolean = isTag): boolean {
+export function isBranchRelative(ref: string): boolean {
   if (ref === TREE_REF) {
     return false;
   }
@@ -63,11 +57,7 @@ export function isBranchRelative(ref: string, tagExists: (name: string) => boole
     return true;
   }
   const range = ref.match(/^(.*?)\.\.\.?(.*)$/);
-  if (range) {
-    return !range[1] || !range[2];
-  }
-  const base = ref.split(/[~^]/)[0];
-  return !COMMIT_HASH.test(base) && !tagExists(base);
+  return !range || !range[1] || !range[2];
 }
 
 /** The checked out branch, or `detached@<sha>` for a detached HEAD. */
@@ -119,14 +109,17 @@ function adoptableSessions(ref: string, scope: string): SessionRow[] {
   });
 }
 
-/** Folds `sessions` into the first, which becomes the session of (`ref`, `scope`). */
+/**
+ * Folds the threads and tours of `sessions` into the first, which becomes
+ * the session of (`ref`, `scope`). The others stay without a scope, as an
+ * older diffity that still runs may write to them.
+ */
 function adoptSessions(sessions: SessionRow[], scope: string): SessionRow {
   const db = getDb();
   const [kept, ...merged] = sessions;
   for (const session of merged) {
     db.prepare('UPDATE comment_threads SET session_id = ? WHERE session_id = ?').run(kept.id, session.id);
     db.prepare('UPDATE tours SET session_id = ? WHERE session_id = ?').run(kept.id, session.id);
-    db.prepare('DELETE FROM review_sessions WHERE id = ?').run(session.id);
   }
   db.prepare('UPDATE review_sessions SET scope = ? WHERE id = ?').run(scope, kept.id);
   return { ...kept, scope };

@@ -7,6 +7,7 @@ import { repoInfoOptions } from "../queries/info";
 import { refOptions, statusOptions } from "../queries/refs";
 import { parseCommitRef } from "../lib/refs";
 import { readViewState, rememberLocation } from "../lib/view-state";
+import { getSettings, settingsLoaded } from "../lib/preferences";
 import { DiffPage } from "../components/diff/diff-page";
 import { ErrorPage } from "../components/error-page";
 
@@ -18,7 +19,9 @@ export async function clientLoader({ request }: Route.ClientLoaderArgs) {
   const commit = parseCommitRef(ref);
 
   await Promise.all([
-    queryClient.ensureQueryData(diffOptions(readViewState("diff:hide-whitespace", false), ref)),
+    settingsLoaded().then(() => queryClient.ensureQueryData(
+      diffOptions(readViewState("diff:hide-whitespace", getSettings().hideWhitespace), ref, readViewState("diff:show-hidden", false)),
+    )),
     queryClient.ensureQueryData(repoInfoOptions(ref)),
     queryClient.prefetchQuery(statusOptions()),
     commit ? queryClient.prefetchQuery(refOptions(commit)) : null,

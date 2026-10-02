@@ -6,6 +6,7 @@ import { parseDiff } from '@diffity/parser';
 import {
   isGitRepo,
   isValidGitRef,
+  getRefDiff,
   resolveRef,
   getRepoRoot,
   getWorkingTreeFileContent,
@@ -253,7 +254,7 @@ Examples:
         }
       } else {
         try {
-          target = resolveDiffTarget(parseDiff(resolveRef(session.ref)), session.ref, request);
+          target = resolveDiffTarget(parseDiff(resolveRef(session.ref, [], { showHidden: true })), session.ref, request);
         } catch (err) {
           // A path that is not on disk either is more likely mistyped than missing from the diff.
           if (err instanceof CommentTargetError && err.kind === 'file' && !existsSync(join(getRepoRoot(), request.path))) {
@@ -343,12 +344,15 @@ Examples:
     .action((opts) => {
       const session = requireSession(opts);
       const ref = session.ref === '__tree__' ? 'work' : session.ref;
-      const raw = resolveRef(ref);
-      if (!raw.trim()) {
+      const { patch, hiddenFiles } = getRefDiff(ref);
+      if (hiddenFiles.length > 0) {
+        console.error(pc.dim(`${hiddenFiles.length} file${hiddenFiles.length === 1 ? '' : 's'} hidden by .diffityignore`));
+      }
+      if (!patch.trim()) {
         console.error(pc.dim('No diff content for current session.'));
         process.exit(0);
       }
-      process.stdout.write(raw);
+      process.stdout.write(patch);
     });
 
   agent

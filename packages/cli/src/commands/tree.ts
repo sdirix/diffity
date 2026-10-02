@@ -12,7 +12,7 @@ export function registerTreeCommand(program: Command, version: string) {
     .description('Open a file browser view of the repository')
     .option('--port <port>', 'Port to use')
     .option('--no-open', 'Do not open browser automatically')
-    .option('--dark', 'Open in dark mode')
+    .option('--dark', 'Open in dark mode if the theme setting is System')
     .option('--quiet', 'Minimal terminal output')
     .option('--new', 'Stop existing instance and start fresh')
     .action(async (opts) => {

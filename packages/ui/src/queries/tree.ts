@@ -1,5 +1,5 @@
 import { queryOptions } from '@tanstack/react-query';
-import { fetchTreePaths, fetchTreeEntries, fetchTreeInfo, fetchTreeFileContent, fetchTreeStatus, fetchTour } from '../lib/api';
+import { fetchTreePaths, fetchTreeEntries, fetchTreeInfo, fetchTreeFileContent, fetchTreeHidden, fetchTreeStatus, fetchTour } from '../lib/api';
 
 export function treePathsOptions() {
   return queryOptions({
@@ -13,6 +13,14 @@ export function treeStatusOptions() {
   return queryOptions({
     queryKey: ['tree-status'],
     queryFn: () => fetchTreeStatus(),
+    staleTime: 60_000,
+  });
+}
+
+export function treeHiddenOptions() {
+  return queryOptions({
+    queryKey: ['tree-hidden'],
+    queryFn: () => fetchTreeHidden(),
     staleTime: 60_000,
   });
 }

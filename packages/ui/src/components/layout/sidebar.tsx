@@ -20,6 +20,8 @@ interface SidebarProps {
   files: DiffFile[];
   activeFile: string | null;
   reviewedFiles: Set<string>;
+  /** Files that changed after they were marked viewed. */
+  changedSinceViewed: Set<string>;
   commentCountsByFile: Map<string, number>;
   repoRoot: string;
   editor: boolean;
@@ -33,6 +35,7 @@ export function Sidebar(props: SidebarProps) {
     files,
     activeFile,
     reviewedFiles,
+    changedSinceViewed,
     commentCountsByFile,
     repoRoot,
     editor,
@@ -186,6 +189,7 @@ export function Sidebar(props: SidebarProps) {
         search={search}
         activeFile={activeFile}
         reviewedFiles={reviewedFiles}
+        changedSinceViewed={changedSinceViewed}
         commentCountsByFile={commentCountsByFile}
         commentedFilesOnly={commentedFilesOnly}
         flat={flat}

@@ -40,16 +40,26 @@ const KIND_ICONS: Record<RefKind, (props: SVGProps<SVGSVGElement>) => ReactNode>
   ref: GitCompareIcon,
 };
 
-/** Opens the diff of `ref`, keeping the other URL parameters. */
+interface NavigateToRefOptions {
+  /** Scrolls the diff to this thread once it loads. */
+  thread?: string;
+  replace?: boolean;
+}
+
+/** Opens the diff of `ref`, keeping the other URL parameters except a thread to scroll to. */
 export function useNavigateToRef() {
   const navigate = useNavigate();
   const { search } = useLocation();
 
-  return useCallback((ref: string) => {
+  return useCallback((ref: string, options: NavigateToRefOptions = {}) => {
     const params = new URLSearchParams(search);
     params.delete('ref');
+    params.delete('thread');
+    if (options.thread) {
+      params.set('thread', options.thread);
+    }
     const rest = params.toString();
-    navigate(`/diff?ref=${encodeURIComponent(ref).replace(/%2F/g, '/')}${rest ? `&${rest}` : ''}`);
+    navigate(`/diff?ref=${encodeURIComponent(ref).replace(/%2F/g, '/')}${rest ? `&${rest}` : ''}`, { replace: options.replace });
   }, [navigate, search]);
 }
 

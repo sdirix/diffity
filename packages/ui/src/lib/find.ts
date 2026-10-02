@@ -127,6 +127,12 @@ export function carryCurrent(previous: FindMatch | null, matches: FindMatch[]): 
   return matches.findIndex((match) => match.scope === previous.scope && match.key === previous.key && match.start === previous.start);
 }
 
+/** Which of the files to fetch, in order: the settled ones and the first `limit` of the others. */
+export function fetchWindow(settled: boolean[], limit: number): boolean[] {
+  let budget = limit;
+  return settled.map((done) => done || budget-- > 0);
+}
+
 /** The next match index in `direction`, wrapping around. */
 export function stepIndex(current: number, count: number, direction: 1 | -1): number {
   if (count === 0) {

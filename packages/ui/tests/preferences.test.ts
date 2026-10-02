@@ -1,6 +1,14 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { readJsonPreference, readPreference, writeJsonPreference, writePreference } from '../src/lib/preferences';
-import { parseDiffPalette } from '../src/lib/diff-palette';
+import {
+  DEFAULT_SETTINGS,
+  getSettings,
+  parseSettings,
+  readJsonPreference,
+  readPreference,
+  updateSettings,
+  writeJsonPreference,
+  writePreference,
+} from '../src/lib/preferences';
 
 function stubStorage() {
   const items = new Map<string, string>();
@@ -59,10 +67,63 @@ describe('preferences', () => {
   });
 });
 
-describe('parseDiffPalette', () => {
-  it('falls back to the default palette', () => {
-    expect(parseDiffPalette('colorblind')).toBe('colorblind');
-    expect(parseDiffPalette(null)).toBe('default');
-    expect(parseDiffPalette('unknown')).toBe('default');
+describe('parseSettings', () => {
+  it('falls back to the defaults', () => {
+    expect(parseSettings(null)).toEqual(DEFAULT_SETTINGS);
+    expect(parseSettings('dark')).toEqual(DEFAULT_SETTINGS);
+    expect(parseSettings({ theme: 'neon', diffPalette: 'colorblind', hideWhitespace: 'yes', editor: 3, extra: 1 })).toEqual({
+      ...DEFAULT_SETTINGS,
+      diffPalette: 'colorblind',
+    });
+  });
+
+  it('keeps valid values', () => {
+    const settings = {
+      theme: 'dark',
+      diffPalette: 'default',
+      diffLayout: 'unified',
+      hideWhitespace: true,
+      editor: 'custom',
+      editorCommand: 'subl {file}:{line}',
+    };
+    expect(parseSettings(settings)).toEqual(settings);
+  });
+});
+
+describe('updateSettings', () => {
+  function stubServer() {
+    const answers: ((value: unknown) => void)[] = [];
+    const bodies: unknown[] = [];
+    vi.stubGlobal('fetch', (_url: string, init: RequestInit) => {
+      bodies.push(JSON.parse(String(init.body)));
+      return new Promise((resolve) => {
+        answers.push((value) => resolve({ ok: true, json: async () => value }));
+      });
+    });
+    return { answers, bodies };
+  }
+
+  it('applies the patch at once, then the saved settings', async () => {
+    stubStorage();
+    const { answers, bodies } = stubServer();
+    const saving = updateSettings({ theme: 'dark' });
+    expect(getSettings().theme).toBe('dark');
+    expect(bodies).toEqual([{ theme: 'dark' }]);
+    answers[0]({ ...DEFAULT_SETTINGS, theme: 'dark', diffLayout: 'unified' });
+    await saving;
+    expect(getSettings()).toMatchObject({ theme: 'dark', diffLayout: 'unified' });
+  });
+
+  it('drops the answer of a save that a later one overtook', async () => {
+    const items = stubStorage();
+    const { answers } = stubServer();
+    const first = updateSettings({ hideWhitespace: true });
+    const second = updateSettings({ hideWhitespace: false });
+    answers[1]({ ...DEFAULT_SETTINGS, hideWhitespace: false });
+    await second;
+    answers[0]({ ...DEFAULT_SETTINGS, hideWhitespace: true });
+    await first;
+    expect(getSettings().hideWhitespace).toBe(false);
+    expect(JSON.parse(items.get('diffity-settings')!).hideWhitespace).toBe(false);
   });
 });

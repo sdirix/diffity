@@ -1,19 +1,27 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useQueries, useQueryClient, type UseQueryResult } from '@tanstack/react-query';
 import type { DiffFile } from '@diffity/parser';
 import { cn } from '../../lib/cn';
-import { carryCurrent, diffFindLines, firstMatchFrom, searchLines, stepIndex, type FindMatch } from '../../lib/find';
+import { carryCurrent, diffFindLines, fetchWindow, firstMatchFrom, searchLines, stepIndex, type FindMatch } from '../../lib/find';
 import { clearMatches, groupMatches, paintMatches } from '../../lib/find-highlight';
 import { isModPressed, MOD_KEY } from '../../lib/platform';
+import { isModalOpen } from '../../lib/dom-utils';
+import { filePatchOptions, type DiffSource } from '../../queries/diff';
 import { IconButton } from '../ui/icon-button';
 import { SearchIcon } from '../icons/search-icon';
 import { ChevronUpIcon } from '../icons/chevron-up-icon';
 import { ChevronDownIcon } from '../icons/chevron-down-icon';
 import { XIcon } from '../icons/x-icon';
+import { Spinner } from '../icons/spinner';
 
 const SEARCH_DEBOUNCE_MS = 120;
+/** Trimmed files fetched at once for a search. */
+const PATCH_FETCHES = 4;
 
 interface FindBarProps {
   files: DiffFile[];
+  /** Where `files` came from, to fetch the hunks of the `trimmed` ones once there is something to find. */
+  source: DiffSource;
   /** The file being read. A new search starts at its first match. */
   activeFile: string | null;
   onReveal: (match: FindMatch) => void;
@@ -38,13 +46,18 @@ function isTyping(target: EventTarget | null): boolean {
   return element.tagName === 'INPUT' || element.tagName === 'TEXTAREA' || element.tagName === 'SELECT' || element.isContentEditable;
 }
 
-function statusLabel(query: string, result: FindResultState): string {
+/** Each fetched file, `undefined` while it loads and `null` when it failed. */
+function patchData(results: UseQueryResult<DiffFile>[]): (DiffFile | null | undefined)[] {
+  return results.map((result) => (result.isError ? null : result.data));
+}
+
+function statusLabel(query: string, result: FindResultState, loading: boolean): string {
   if (!query) {
     return '';
   }
   const count = result.matches.length;
   if (count === 0) {
-    return 'No results';
+    return loading ? 'Searching' : 'No results';
   }
   const current = result.current >= 0 ? (result.current + 1).toLocaleString() : '-';
   return `${current} of ${count.toLocaleString()}${result.truncated ? '+' : ''}`;
@@ -52,7 +65,7 @@ function statusLabel(query: string, result: FindResultState): string {
 
 /** Find in all files of the diff, searching the diff data so collapsed and unmounted files are included. */
 export function FindBar(props: FindBarProps) {
-  const { files, activeFile, onReveal, onClose, openRequest } = props;
+  const { files, source, activeFile, onReveal, onClose, openRequest } = props;
   const [open, setOpen] = useState(false);
   const [focusTick, setFocusTick] = useState(0);
   const [query, setQuery] = useState('');
@@ -63,7 +76,36 @@ export function FindBar(props: FindBarProps) {
   const latest = useRef({ open, result, activeFile, onReveal, onClose });
   latest.current = { open, result, activeFile, onReveal, onClose };
 
-  const lines = useMemo(() => (open ? diffFindLines(files) : []), [open, files]);
+  const queryClient = useQueryClient();
+  const searching = open && query !== '';
+  const trimmed = useMemo(() => (searching ? files.filter((file) => file.trimmed) : []), [searching, files]);
+  const patchQueries = trimmed.map((file) => filePatchOptions(file, source));
+  const fetching = fetchWindow(
+    patchQueries.map((options) => {
+      const status = queryClient.getQueryState(options.queryKey)?.status;
+      return status === 'success' || status === 'error';
+    }),
+    PATCH_FETCHES,
+  );
+  const patches = useQueries({
+    queries: patchQueries.map((options, i) => ({ ...options, enabled: fetching[i] })),
+    combine: patchData,
+  });
+  const pending = patches.filter((patch) => patch === undefined).length;
+  const searched = useMemo(() => {
+    if (trimmed.length === 0) {
+      return files;
+    }
+    const loaded = new Map<DiffFile, DiffFile>();
+    trimmed.forEach((file, i) => {
+      const patch = patches[i];
+      if (patch) {
+        loaded.set(file, patch);
+      }
+    });
+    return files.map((file) => loaded.get(file) ?? file);
+  }, [files, trimmed, patches]);
+  const lines = useMemo(() => (open ? diffFindLines(searched) : []), [open, searched]);
   const byLine = useMemo(() => groupMatches(result.matches), [result.matches]);
 
   const step = (direction: 1 | -1) => {
@@ -83,15 +125,18 @@ export function FindBar(props: FindBarProps) {
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape' && latest.current.open && !isTyping(event.target)) {
-        close();
+      if (event.key === 'Escape') {
+        // A dialog or menu that took the key closes on its own.
+        if (latest.current.open && !isTyping(event.target) && !event.defaultPrevented && !isModalOpen()) {
+          close();
+        }
         return;
       }
       if (!isModPressed(event) || event.altKey) {
         return;
       }
       const key = event.key.toLowerCase();
-      if (key === 'f' && !event.shiftKey && !document.querySelector('dialog:modal')) {
+      if (key === 'f' && !event.shiftKey && !isModalOpen()) {
         event.preventDefault();
         setOpen(true);
         setFocusTick((tick) => tick + 1);
@@ -203,8 +248,13 @@ export function FindBar(props: FindBarProps) {
         autoComplete="off"
         className="w-56 h-7 min-w-0 px-1 bg-transparent text-xs text-text outline-none placeholder:text-text-muted"
       />
-      <span className="min-w-16 shrink-0 text-right text-[11px] tabular-nums text-text-muted" aria-live="polite">
-        {statusLabel(query, result)}
+      <span
+        className="flex min-w-16 shrink-0 items-center justify-end gap-1.5 text-[11px] tabular-nums text-text-muted"
+        aria-live="polite"
+        title={pending > 0 ? `Loading ${pending} large file${pending === 1 ? '' : 's'} to search` : undefined}
+      >
+        {pending > 0 && query && <Spinner className="w-2.5 h-2.5" />}
+        {statusLabel(query, result, pending > 0)}
       </span>
       <button
         type="button"

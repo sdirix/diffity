@@ -71,6 +71,18 @@ export function gitTry(args: string[], options?: GitOptions): string | null {
   }
 }
 
+/**
+ * `spec` as a line of `git cat-file --batch` input, `null` when it names no
+ * object. Git drops a trailing CR from such a line and cannot read a
+ * newline in it, so these specs are resolved to an object id first.
+ */
+export function batchSpec(spec: string): string | null {
+  if (!spec.includes('\n') && !spec.endsWith('\r')) {
+    return spec;
+  }
+  return gitTry(['rev-parse', '--verify', '--quiet', '--end-of-options', spec])?.trim() || null;
+}
+
 const roots = new Map<string, string>();
 
 export function getRepoRoot(): string {

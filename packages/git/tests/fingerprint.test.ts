@@ -105,6 +105,29 @@ describe('getDiffFingerprint', () => {
     expect(getDiffFingerprint('HEAD~1')).not.toBe(single);
   });
 
+  it('changes when a submodule moves to another commit', () => {
+    const sub = createRepo();
+    for (const n of [1, 2, 3]) {
+      sub.write('src/f.txt', `${n}\n`);
+      sub.commit(`c${n}`);
+    }
+    repo.git('-c', 'protocol.file.allow=always', 'submodule', 'add', '-q', sub.dir, 'vendor');
+    repo.commit('add submodule');
+    const inSub = (...args: string[]) => repo.git('-C', 'vendor', ...args);
+    try {
+      inSub('checkout', '-q', 'HEAD~1');
+      const first = fingerprints();
+      inSub('checkout', '-q', 'HEAD~1');
+      const second = fingerprints();
+      expect(second.work).not.toBe(first.work);
+      expect(second.unstaged).not.toBe(first.unstaged);
+      expect(second.tree).not.toBe(first.tree);
+      expect(second.staged).toBe(first.staged);
+    } finally {
+      sub.remove();
+    }
+  });
+
   it('stats files relative to the root from a subdirectory', () => {
     repo.write('sub/b.txt', 'bea\n');
     process.chdir(join(repo.dir, 'sub'));

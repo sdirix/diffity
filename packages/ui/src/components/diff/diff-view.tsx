@@ -1,14 +1,20 @@
 import { useMemo, useRef, useState, useCallback, useImperativeHandle, useEffect } from 'react';
 import { useVirtualizer, type Rect, type VirtualItem } from '@tanstack/react-virtual';
-import type { ParsedDiff } from '@diffity/parser';
-import { FileBlock, LARGE_DIFF_LINE_THRESHOLD } from './file-block';
+import type { DiffFile, ParsedDiff } from '@diffity/parser';
+import { DeferredFileBlock } from './deferred-file-block';
+import { SLICE_RESIZE_EVENT } from './lazy-slice';
+import type { SinceViewedInfo } from './since-viewed';
 import { GeneralComments } from '../comments/general-comments';
+import { OutsideThreads } from '../comments/outside-threads';
 import { getLang, useHighlighter, type CodeHighlighter } from '../../hooks/use-highlighter';
-import { type ViewMode, getFilePath } from '../../lib/diff-utils';
+import { type ViewMode, deferReason, getFilePath } from '../../lib/diff-utils';
 import type { CommentThread, LineSelection } from '../comments/types';
 import type { CommentActions } from '../../hooks/use-comment-actions';
+import type { LocatedThread } from '../../lib/api';
+import type { FindMatch } from '../../lib/find';
+import type { DiffSource } from '../../queries/diff';
 
-function flashThreadElement(element: Element) {
+export function flashThreadElement(element: Element) {
   element.dispatchEvent(new CustomEvent('diffity:focus-thread', { bubbles: false }));
   element.classList.remove('flash-thread');
   void (element as HTMLElement).offsetWidth;
@@ -17,7 +23,8 @@ function flashThreadElement(element: Element) {
 
 export interface DiffViewHandle {
   scrollToFile: (path: string) => void;
-  scrollToThread: (threadId: string, filePath: string) => void;
+  /** Scrolls to a thread, mounting its file first, and calls `onRevealed` once it is in view. */
+  scrollToThread: (threadId: string, filePath: string, onRevealed?: () => void) => void;
   /** Brings a line rendered with `data-find-line` into view, mounting its file first. */
   scrollToLine: (path: string, key: string) => void;
 }
@@ -38,21 +45,31 @@ interface DiffViewProps {
   collapsedFiles: Set<string>;
   onToggleCollapse: (path: string) => void;
   reviewedFiles: Set<string>;
+  /** Files that changed after they were marked viewed. */
+  sinceViewedFiles: Map<string, SinceViewedInfo>;
+  /** Files showing only their changes since viewed. */
+  sinceViewedShown: Set<string>;
+  onShowSinceViewedChange: (path: string, show: boolean) => void;
   onReviewedChange: (path: string, reviewed: boolean) => void;
   onActiveFileChange?: (path: string) => void;
   scrollRef?: React.RefCallback<HTMLElement>;
   handle?: React.Ref<DiffViewHandle>;
   baseRef?: string;
+  /** Where the diff came from, to fetch the hunks of `trimmed` files. */
+  source: DiffSource;
   canRevert?: boolean;
   onRevert?: () => void;
   threads: CommentThread[];
+  /** Threads on files that left the diff. */
+  outsideThreads: CommentThread[];
+  threadLocations: Map<string, LocatedThread>;
   commentsEnabled: boolean;
   commentActions: CommentActions;
   onAddThread: CommentActions['addThread'];
   pendingSelection: LineSelection | null;
   onPendingSelectionChange: (selection: LineSelection | null) => void;
-  /** The file of the current find match, rendered even when its diff is large. */
-  findFile?: string | null;
+  /** The current find match, rendered even when its file is held back. */
+  findMatch?: FindMatch | null;
   /** Opens the general comment form whenever it changes. */
   generalCommentRequest?: number;
 }
@@ -72,46 +89,71 @@ function isLineInView(element: Element, scroller: HTMLElement): boolean {
   return rect.top >= bounds.top + STICKY_HEADER_OFFSET && rect.bottom <= bounds.bottom - 16;
 }
 
-/** Waits up to 2s for the line to mount, then keeps it in view for 500ms while the virtualizer settles. */
-function settleOnLine(scroller: HTMLElement, selector: string): () => void {
+/** Calls `reveal` with the element `selector` names once it is mounted in `scroller`, waiting up to 2s. */
+function whenMounted(scroller: HTMLElement, selector: string, reveal: (element: Element) => void): () => void {
   let frame = 0;
-  let foundAt = 0;
   const started = performance.now();
 
   const tick = () => {
-    const now = performance.now();
     const element = scroller.querySelector(selector);
     if (element) {
-      foundAt = foundAt || now;
-      if (!isLineInView(element, scroller)) {
-        element.scrollIntoView({ behavior: 'instant', block: 'center' });
-      }
-      if (now - foundAt > 500) {
-        return;
-      }
-    } else if (now - started > 2000) {
-      return;
+      reveal(element);
+    } else if (performance.now() - started < 2000) {
+      frame = requestAnimationFrame(tick);
     }
-    frame = requestAnimationFrame(tick);
   };
 
   frame = requestAnimationFrame(tick);
   return () => cancelAnimationFrame(frame);
 }
 
-function estimateFileHeight(file: { hunks: { lines: { length: number } }[]; isBinary: boolean }, collapsed: boolean): number {
+/** A row near the top of the scroller, or the find match while it is in view, and how far below the scroller top it sits. */
+interface ReadingAnchor {
+  element: Element;
+  offset: number;
+  /** The row's line, to find it again once the rows are rendered anew, as after a switch between split and unified view. */
+  line: FindLineRef | null;
+}
+
+/** A line rendered with `data-find-line` in the file with `data-find-scope`. */
+interface FindLineRef {
+  scope: string;
+  key: string;
+}
+
+function lineSelector(scope: string, key: string): string {
+  return `[data-find-scope="${CSS.escape(scope)}"] [data-find-line="${CSS.escape(key)}"]`;
+}
+
+function readingAnchor(scroller: HTMLElement, findMatch?: FindMatch | null): ReadingAnchor | null {
+  const bounds = scroller.getBoundingClientRect();
+  const match = findMatch && scroller.querySelector(lineSelector(findMatch.scope, findMatch.key));
+  const hit = match && isLineInView(match, scroller)
+    ? match
+    : document.elementFromPoint(bounds.left + bounds.width / 2, bounds.top + STICKY_HEADER_OFFSET + 8);
+  const element = hit?.closest('tr') ?? hit;
+  if (!element || !scroller.contains(element)) {
+    return null;
+  }
+  const key = (hit?.closest('[data-find-line]') ?? element.querySelector('[data-find-line]'))?.getAttribute('data-find-line');
+  const scope = element.closest('[data-find-scope]')?.getAttribute('data-find-scope');
+  return {
+    element,
+    offset: element.getBoundingClientRect().top - bounds.top,
+    line: key && scope !== undefined && scope !== null ? { scope, key } : null,
+  };
+}
+
+function estimateFileHeight(file: DiffFile, collapsed: boolean): number {
   if (collapsed) {
     return FILE_HEADER_HEIGHT;
   }
-  if (file.isBinary || file.hunks.length === 0) {
+  if (file.isBinary || file.hunks.length === 0 || deferReason(file)) {
     return EMPTY_CONTENT_HEIGHT;
   }
   let lineCount = 0;
   for (const hunk of file.hunks) {
     lineCount += hunk.lines.length;
-  }
-  if (lineCount >= LARGE_DIFF_LINE_THRESHOLD) {
-    return EMPTY_CONTENT_HEIGHT;
   }
   return FILE_HEADER_HEIGHT + lineCount * LINE_HEIGHT + file.hunks.length * HUNK_HEADER_HEIGHT + FILE_BLOCK_PADDING;
 }
@@ -119,10 +161,10 @@ function estimateFileHeight(file: { hunks: { lines: { length: number } }[]; isBi
 export function DiffView(props: DiffViewProps) {
   const {
     diff, viewMode, theme, collapsedFiles, onToggleCollapse,
-    reviewedFiles, onReviewedChange, onActiveFileChange, scrollRef,
-    handle, baseRef, canRevert, onRevert,
-    threads, commentsEnabled, commentActions, onAddThread,
-    pendingSelection, onPendingSelectionChange, findFile, generalCommentRequest,
+    reviewedFiles, sinceViewedFiles, sinceViewedShown, onShowSinceViewedChange, onReviewedChange, onActiveFileChange, scrollRef,
+    handle, baseRef, source, canRevert, onRevert,
+    threads, outsideThreads, threadLocations, commentsEnabled, commentActions, onAddThread,
+    pendingSelection, onPendingSelectionChange, findMatch, generalCommentRequest,
   } = props;
   const { tokenize, ready: highlighterReady } = useHighlighter();
   const scrollElementRef = useRef<HTMLElement>(null);
@@ -152,6 +194,41 @@ export function DiffView(props: DiffViewProps) {
     initialRect: restored?.rect ?? undefined,
     initialMeasurementsCache: restored?.measurements,
   });
+  const listRef = useRef<HTMLDivElement>(null);
+  /** Whether the virtualizer corrects the scroll for the next size change of an item, decided when one of its slices changed. */
+  const resizeOwners = useRef(new Map<number, boolean>());
+  /** Set for the frame the scroller width changed in, which the reading anchor corrects for. */
+  const widthChangeRef = useRef(false);
+  // The scroller opts out of scroll anchoring. The virtualizer corrects for files that ended above the viewport, the slices of a file reaching into it correct for themselves.
+  virtualizer.shouldAdjustScrollPositionOnItemSizeChange = (item, _delta, instance) => {
+    const owner = resizeOwners.current.get(item.index);
+    resizeOwners.current.delete(item.index);
+    if (widthChangeRef.current) {
+      return false;
+    }
+    return owner ?? item.end <= (instance.scrollOffset ?? 0);
+  };
+
+  useEffect(() => {
+    const list = listRef.current;
+    if (!list) {
+      return;
+    }
+    const handleSliceResize = (event: Event) => {
+      const index = Number((event.target as Element).closest('[data-index]')?.getAttribute('data-index'));
+      const item = virtualizer.measurementsCache[index];
+      if (!item) {
+        return;
+      }
+      const owner = item.end <= (virtualizer.scrollOffset ?? 0);
+      resizeOwners.current.set(index, owner);
+      if (owner) {
+        event.preventDefault();
+      }
+    };
+    list.addEventListener(SLICE_RESIZE_EVENT, handleSliceResize);
+    return () => list.removeEventListener(SLICE_RESIZE_EVENT, handleSliceResize);
+  }, [virtualizer]);
 
   useEffect(() => () => {
     savedScrolls.set(diff, {
@@ -161,69 +238,84 @@ export function DiffView(props: DiffViewProps) {
     });
   }, [diff, virtualizer]);
 
+  const anchorRef = useRef<ReadingAnchor | null>(null);
+  const anchorFrameRef = useRef(0);
+  const findMatchRef = useRef(findMatch);
+  findMatchRef.current = findMatch;
+
+  const noteAnchor = useCallback(() => {
+    if (anchorFrameRef.current) {
+      return;
+    }
+    anchorFrameRef.current = requestAnimationFrame(() => {
+      anchorFrameRef.current = 0;
+      const scroller = scrollElementRef.current;
+      anchorRef.current = scroller && readingAnchor(scroller, findMatchRef.current);
+    });
+  }, []);
+
+  useEffect(noteAnchor, [findMatch, noteAnchor]);
+
+  // Rows rewrap when the scroller gets wider or narrower. The row read last stays in place, which covers the files above it too.
+  useEffect(() => {
+    const scroller = scrollElementRef.current;
+    if (!scroller) {
+      return;
+    }
+    let width = scroller.clientWidth;
+    let frame = 0;
+    const observer = new ResizeObserver(() => {
+      const anchor = anchorRef.current;
+      if (scroller.clientWidth === width) {
+        return;
+      }
+      width = scroller.clientWidth;
+      if (!anchor?.element.isConnected) {
+        return;
+      }
+      widthChangeRef.current = true;
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        widthChangeRef.current = false;
+      });
+      scroller.scrollTop += anchor.element.getBoundingClientRect().top - scroller.getBoundingClientRect().top - anchor.offset;
+    });
+    observer.observe(scroller);
+    return () => {
+      observer.disconnect();
+      cancelAnimationFrame(frame);
+      cancelAnimationFrame(anchorFrameRef.current);
+    };
+  }, []);
+
   const scrollTargetRef = useRef<string | null>(null);
   const [highlightedFile, setHighlightedFile] = useState<string | null>(null);
 
-  const [pendingThreadScroll, setPendingThreadScroll] = useState<string | null>(null);
-  const cancelLineScrollRef = useRef<(() => void) | null>(null);
+  const cancelJumpRef = useRef<(() => void) | null>(null);
 
-  useEffect(() => () => cancelLineScrollRef.current?.(), []);
+  useEffect(() => () => cancelJumpRef.current?.(), []);
 
-  const settleScrollToElement = useCallback((selector: string, align: ScrollLogicalPosition, onFound?: (el: Element) => void) => {
-    let disposed = false;
-    const scrollEl = scrollElementRef.current;
-
-    const doScroll = () => {
-      const element = document.querySelector(selector);
-      if (!element) {
-        return false;
-      }
-      requestAnimationFrame(() => {
-        if (!disposed) {
-          element.scrollIntoView({ behavior: 'instant', block: align });
-          onFound?.(element);
-        }
-      });
-      return true;
-    };
-
-    if (doScroll()) {
-      return () => { disposed = true; };
+  /**
+   * Hands the element `selector` names to `reveal` once it is mounted, after
+   * scrolling to file `index` when it is not yet. A new jump cancels the one
+   * before, and one that found its element is done.
+   */
+  const jumpTo = useCallback((index: number, selector: string, reveal: (element: Element) => void) => {
+    const scroller = scrollElementRef.current;
+    if (!scroller) {
+      return;
     }
-
-    let observer: MutationObserver | null = null;
-    if (scrollEl) {
-      observer = new MutationObserver(() => {
-        if (doScroll()) {
-          observer?.disconnect();
-        }
-      });
+    cancelJumpRef.current?.();
+    if (index >= 0 && !scroller.querySelector(selector)) {
+      virtualizer.scrollToIndex(index, { align: 'start' });
     }
-
-    observer?.observe(scrollEl!, { childList: true, subtree: true });
-
-    const retryTimers = [50, 150, 300, 500].map((delay) =>
-      setTimeout(() => {
-        if (!disposed && doScroll()) {
-          observer?.disconnect();
-        }
-      }, delay)
-    );
-
-    const timeout = setTimeout(() => {
-      disposed = true;
-      observer?.disconnect();
-    }, 2000);
-
-    return () => {
-      disposed = true;
-      observer?.disconnect();
-      clearTimeout(timeout);
-      for (const timer of retryTimers) {
-        clearTimeout(timer);
-      }
-    };
-  }, []);
+    cancelJumpRef.current = whenMounted(scroller, selector, (element) => {
+      cancelJumpRef.current = null;
+      reveal(element);
+      // Ends the virtualizer's chase of the file it scrolled to, which would move the element out of view again.
+      virtualizer.scrollToOffset(scroller.scrollTop);
+    });
+  }, [virtualizer]);
 
   useImperativeHandle(handle, () => ({
     scrollToFile: (path: string) => {
@@ -231,63 +323,55 @@ export function DiffView(props: DiffViewProps) {
       if (index >= 0) {
         scrollTargetRef.current = path;
         setHighlightedFile(path);
-        virtualizer.scrollToIndex(index, { align: 'start' });
-        settleScrollToElement(`#file-${CSS.escape(encodeURIComponent(path))}`, 'start');
+        jumpTo(index, `#file-${CSS.escape(encodeURIComponent(path))}`, (element) => {
+          element.scrollIntoView({ behavior: 'instant', block: 'start' });
+        });
       }
     },
-    scrollToThread: (threadId: string, filePath: string) => {
-      const element = document.querySelector(`[data-thread-id="${threadId}"]`);
-      if (element) {
-        requestAnimationFrame(() => {
-          element.scrollIntoView({ behavior: 'instant', block: 'center' });
-          flashThreadElement(element);
-        });
-        return;
-      }
-
-      const index = diff.files.findIndex((f) => getFilePath(f) === filePath);
+    scrollToThread: (threadId: string, filePath: string, onRevealed?: () => void) => {
+      const selector = `[data-thread-id="${CSS.escape(threadId)}"]`;
+      const index = scrollElementRef.current?.querySelector(selector) ? -1 : diff.files.findIndex((f) => getFilePath(f) === filePath);
       if (index >= 0) {
         scrollTargetRef.current = filePath;
-        virtualizer.scrollToIndex(index, { align: 'start' });
-        setPendingThreadScroll(threadId);
       }
+      jumpTo(index, selector, (element) => {
+        element.scrollIntoView({ behavior: 'instant', block: 'center' });
+        flashThreadElement(element);
+        onRevealed?.();
+      });
     },
     scrollToLine: (path: string, key: string) => {
       const scroller = scrollElementRef.current;
-      if (!scroller) {
-        return;
-      }
-      cancelLineScrollRef.current?.();
-      if (!document.getElementById(`file-${encodeURIComponent(path)}`)) {
-        const index = diff.files.findIndex((f) => getFilePath(f) === path);
-        if (index < 0) {
-          return;
+      const mounted = !!document.getElementById(`file-${encodeURIComponent(path)}`);
+      jumpTo(mounted ? -1 : diff.files.findIndex((f) => getFilePath(f) === path), `[data-find-scope="${CSS.escape(path)}"] [data-find-line="${CSS.escape(key)}"]`, (element) => {
+        if (scroller && !isLineInView(element, scroller)) {
+          element.scrollIntoView({ behavior: 'instant', block: 'center' });
         }
-        virtualizer.scrollToIndex(index, { align: 'start' });
-      }
-      cancelLineScrollRef.current = settleOnLine(
-        scroller,
-        `[data-find-scope="${CSS.escape(path)}"] [data-find-line="${CSS.escape(key)}"]`,
-      );
+      });
     },
-  }), [diff.files, virtualizer, settleScrollToElement]);
+  }), [diff.files, jumpTo]);
 
+  // Split and unified view render other rows, so the line read last is kept mounted, looked up again and put back where it was.
+  const [heldLine, setHeldLine] = useState<FindLineRef | null>(null);
+  const shownViewModeRef = useRef(viewMode);
   useEffect(() => {
-    if (!pendingThreadScroll) {
+    const scroller = scrollElementRef.current;
+    const line = anchorRef.current?.line;
+    const offset = anchorRef.current?.offset ?? 0;
+    if (shownViewModeRef.current === viewMode || !scroller) {
       return;
     }
-
-    const threadId = pendingThreadScroll;
-
-    return settleScrollToElement(
-      `[data-thread-id="${threadId}"]`,
-      'center',
-      (element) => {
-        setPendingThreadScroll(null);
-        flashThreadElement(element);
-      },
-    );
-  }, [pendingThreadScroll, settleScrollToElement]);
+    shownViewModeRef.current = viewMode;
+    if (!line) {
+      return;
+    }
+    setHeldLine(line);
+    jumpTo(diff.files.findIndex((f) => getFilePath(f) === line.scope), lineSelector(line.scope, line.key), (element) => {
+      const row = element.closest('tr') ?? element;
+      scroller.scrollTop += row.getBoundingClientRect().top - scroller.getBoundingClientRect().top - offset;
+      setHeldLine(null);
+    });
+  }, [viewMode, diff.files, jumpTo]);
 
   const getTopVisibleFile = useCallback((): string | null => {
     const visibleItems = virtualizer.getVirtualItems();
@@ -311,6 +395,8 @@ export function DiffView(props: DiffViewProps) {
   }, [virtualizer, diff.files]);
 
   const handleScroll = useCallback(() => {
+    noteAnchor();
+
     if (!onActiveFileChange) {
       return;
     }
@@ -328,7 +414,7 @@ export function DiffView(props: DiffViewProps) {
     }
 
     onActiveFileChange(topFile);
-  }, [getTopVisibleFile, onActiveFileChange]);
+  }, [getTopVisibleFile, onActiveFileChange, noteAnchor]);
 
   const items = virtualizer.getVirtualItems();
   const [paddingTop, paddingBottom] = items.length > 0
@@ -347,16 +433,24 @@ export function DiffView(props: DiffViewProps) {
         }
       }}
       onScroll={handleScroll}
-      className="flex-1 overflow-y-auto pb-12"
+      className="flex-1 overflow-y-auto pb-12 [overflow-anchor:none]"
     >
       {commentsEnabled && (
-        <GeneralComments
-          threads={threads}
-          commentActions={commentActions}
-          composeRequest={generalCommentRequest}
-        />
+        <>
+          <GeneralComments
+            threads={threads}
+            commentActions={commentActions}
+            composeRequest={generalCommentRequest}
+          />
+          <OutsideThreads
+            threads={outsideThreads}
+            locations={threadLocations}
+            commentActions={commentActions}
+            className="mx-4 mt-3 rounded-lg border overflow-hidden"
+          />
+        </>
       )}
-      <div className="py-2" style={{ paddingTop, paddingBottom }}>
+      <div ref={listRef} className="py-2" style={{ paddingTop, paddingBottom }}>
         {items.map((virtualItem) => {
           const file = diff.files[virtualItem.index];
           const filePath = getFilePath(file);
@@ -366,7 +460,7 @@ export function DiffView(props: DiffViewProps) {
               data-index={virtualItem.index}
               ref={virtualizer.measureElement}
             >
-              <FileBlock
+              <DeferredFileBlock
                 highlighted={highlightedFile === filePath}
                 onHighlightEnd={() => {
                   if (highlightedFile === filePath) {
@@ -378,9 +472,13 @@ export function DiffView(props: DiffViewProps) {
                 collapsed={collapsedFiles.has(filePath)}
                 onToggleCollapse={onToggleCollapse}
                 reviewed={reviewedFiles.has(filePath)}
+                sinceViewed={sinceViewedFiles.get(filePath) ?? null}
+                showSinceViewed={sinceViewedShown.has(filePath)}
+                onShowSinceViewedChange={onShowSinceViewedChange}
                 onReviewedChange={onReviewedChange}
                 highlightCode={highlighters.get(filePath)}
                 baseRef={baseRef}
+                source={source}
                 theme={theme}
                 canRevert={canRevert}
                 onRevert={onRevert}
@@ -390,7 +488,8 @@ export function DiffView(props: DiffViewProps) {
                 onAddThread={onAddThread}
                 pendingSelection={pendingSelection}
                 onPendingSelectionChange={onPendingSelectionChange}
-                expandLargeDiff={findFile === filePath}
+                load={findMatch?.scope === filePath}
+                pinnedLines={[findMatch, heldLine].flatMap((line) => (line?.scope === filePath ? [line.key] : []))}
               />
             </div>
           );

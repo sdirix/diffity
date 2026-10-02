@@ -3,8 +3,22 @@ import { SunIcon } from '../icons/sun-icon';
 import { MoonIcon } from '../icons/moon-icon';
 import { EllipsisIcon } from '../icons/ellipsis-icon';
 import { GitHubIcon } from '../icons/github-icon';
+import { EyeOffIcon } from '../icons/eye-off-icon';
+import { SettingsIcon } from '../icons/settings-icon';
+import { openSettings } from '../../hooks/use-settings-dialog';
+import { usePaletteActions, type PaletteAction } from '../../hooks/use-palette';
+import { shortcutHint } from '../../lib/shortcuts';
 
 export const menuItemClass = 'flex items-center gap-2.5 w-full px-3 py-1.5 text-xs text-text-secondary hover:bg-hover hover:text-text transition-colors cursor-pointer text-left';
+
+const SETTINGS_ACTIONS: PaletteAction[] = [{
+  id: 'settings',
+  title: 'Settings',
+  hint: shortcutHint('settings'),
+  keywords: 'preferences options theme colours layout whitespace hidden files editor clear data',
+  icon: <SettingsIcon className="w-3.5 h-3.5" />,
+  run: () => openSettings(),
+}];
 
 interface OptionsMenuProps {
   theme: 'light' | 'dark';
@@ -16,6 +30,7 @@ export function OptionsMenu(props: OptionsMenuProps) {
   const { theme, onToggleTheme, renderExtraItems } = props;
   const [showMenu, setShowMenu] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
+  usePaletteActions('settings', SETTINGS_ACTIONS);
 
   useEffect(() => {
     if (!showMenu) {
@@ -47,12 +62,33 @@ export function OptionsMenu(props: OptionsMenuProps) {
           <button
             className={menuItemClass}
             onClick={() => {
+              openSettings('diff', 'hidden-files');
+              close();
+            }}
+          >
+            <EyeOffIcon className="w-3.5 h-3.5" />
+            Hidden files
+          </button>
+          <button
+            className={menuItemClass}
+            onClick={() => {
               onToggleTheme();
               close();
             }}
           >
             {theme === 'light' ? <MoonIcon className="w-3.5 h-3.5" /> : <SunIcon className="w-3.5 h-3.5" />}
             {theme === 'light' ? 'Dark mode' : 'Light mode'}
+          </button>
+          <button
+            className={menuItemClass}
+            onClick={() => {
+              openSettings();
+              close();
+            }}
+          >
+            <SettingsIcon className="w-3.5 h-3.5" />
+            Settings
+            <span className="ml-auto text-text-muted">{shortcutHint('settings')}</span>
           </button>
           <div className="border-t border-border my-1" />
           <a

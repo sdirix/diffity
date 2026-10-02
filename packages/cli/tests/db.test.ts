@@ -33,6 +33,12 @@ describe('getDb', () => {
     expect(queryOne<{ user_version: number }>('PRAGMA user_version')!.user_version).toBe(version);
   });
 
+  it('keeps empty sessions, which an older diffity may still write to', () => {
+    writeLegacyDb(`INSERT INTO review_sessions (id, ref, head_hash) VALUES ('empty', 'work', 'abc');`);
+    createThread('empty', 'a.txt', 'new', 1, 1, 'still works', { name: 'You', type: 'user' });
+    expect(getThreadsForSession('empty').map((t) => t.comments[0].body)).toEqual(['still works']);
+  });
+
   it('waits for other writers and uses WAL', () => {
     expect(queryOne<{ timeout: number }>('PRAGMA busy_timeout')!.timeout).toBe(5000);
     expect(queryOne<{ journal_mode: string }>('PRAGMA journal_mode')!.journal_mode).toBe('wal');

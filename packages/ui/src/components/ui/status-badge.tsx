@@ -17,6 +17,8 @@ function getCompactLabel(status: string): string {
       return 'R';
     case 'copied':
       return 'C';
+    case 'conflicted':
+      return '!';
     default:
       return 'M';
   }
@@ -32,6 +34,8 @@ function getFullLabel(status: string): string {
       return 'Renamed';
     case 'copied':
       return 'Copied';
+    case 'conflicted':
+      return 'Conflicted';
     default:
       return '';
   }

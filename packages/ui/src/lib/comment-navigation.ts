@@ -8,6 +8,9 @@ export function getUnresolvedFileThreads(threads: CommentThread[]): CommentThrea
 }
 
 export function getThreadLineLabel(thread: CommentThread): string {
+  if (thread.startLine === 0) {
+    return 'File';
+  }
   return thread.startLine === thread.endLine
     ? `L${thread.startLine}`
     : `L${thread.startLine}-${thread.endLine}`;

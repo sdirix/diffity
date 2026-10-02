@@ -378,6 +378,49 @@ describe('parseDiff', () => {
       expect(addLine).toBeDefined();
     });
 
+    it('lists unmerged paths of a combined diff as conflicted', () => {
+      const raw = [
+        'diff --git a/a.txt b/a.txt',
+        'index 1111111..2222222 100644',
+        '--- a/a.txt',
+        '+++ b/a.txt',
+        '@@ -1 +1 @@',
+        '-a',
+        '+b',
+        'diff --cc f.txt',
+        'index f4ea702,3b6f40a..0000000',
+        '--- a/f.txt',
+        '+++ b/f.txt',
+        '@@@ -1,3 -1,3 +1,7 @@@',
+        '  a',
+        '++<<<<<<< HEAD',
+        ' +B1',
+        '+++ looks like a header',
+        '++=======',
+        '+ B2',
+        '++>>>>>>> other',
+        '  c',
+        'diff --combined "caf\\303\\251 \\"x\\".txt"',
+        '@@@ -1 -1 +1 @@@',
+        '- x',
+        'diff --git a/z.txt b/z.txt',
+        'deleted file mode 100644',
+        '--- a/z.txt',
+        '+++ /dev/null',
+        '@@ -1 +0,0 @@',
+        '-z',
+        '',
+      ].join('\n');
+      const result = parseDiff(raw, { maxFilePatchLength: 1000 });
+      expect(result.files.map((f) => [f.oldPath, f.status, f.hunks.length, f.additions, f.deletions])).toEqual([
+        ['a.txt', 'modified', 1, 1, 1],
+        ['f.txt', 'conflicted', 0, 0, 0],
+        ['café "x".txt', 'conflicted', 0, 0, 0],
+        ['z.txt', 'deleted', 1, 0, 1],
+      ]);
+      expect(result.files[1].newPath).toBe('f.txt');
+    });
+
     it('handles submodule changes', () => {
       const result = parseDiff(fixture('submodule.diff'));
 
@@ -424,5 +467,44 @@ describe('long lines', () => {
     const line = 'x'.repeat(WORD_DIFF_MAX_LINE_LENGTH);
     const diff = parseDiff(`diff --git a/a.js b/a.js\n--- a/a.js\n+++ b/a.js\n@@ -1 +1 @@\n-${line}\n+${line.slice(1)}y\n`);
     expect(diff.files[0].hunks[0].lines[0].wordDiff).toBeDefined();
+  });
+});
+
+describe('trimmed files', () => {
+  const small = 'diff --git a/small.txt b/small.txt\n--- a/small.txt\n+++ b/small.txt\n@@ -1 +1 @@\n-a\n+b\n';
+  const big = [
+    'diff --git a/big.txt b/big.txt',
+    'new file mode 100644',
+    '--- /dev/null',
+    '+++ b/big.txt',
+    '@@ -0,0 +1,3 @@',
+    `+${'x'.repeat(100)}`,
+    `+${'y'.repeat(100)}`,
+    '+-- not a header',
+    '\\ No newline at end of file',
+    '',
+  ].join('\n');
+  const changed = 'diff --git a/mod.txt b/mod.txt\n--- a/mod.txt\n+++ b/mod.txt\n@@ -1,3 +1,3 @@\n a\n-b\n+c\n d\n@@ -10 +10,2 @@\n-e\n+f\n+g\n';
+
+  it('drops the hunks of files over the limit and keeps their stats', () => {
+    const diff = parseDiff(small + big + changed, { maxFilePatchLength: 200 });
+    const [first, second, third] = diff.files;
+    expect(first.trimmed).toBeUndefined();
+    expect(first.hunks).toHaveLength(1);
+    expect(second).toMatchObject({ newPath: 'big.txt', status: 'added', trimmed: true, hunks: [], additions: 3, deletions: 0 });
+    expect(third.trimmed).toBeUndefined();
+    expect(third.hunks.map((hunk) => hunk.lines.length)).toEqual([4, 3]);
+    expect(diff.stats).toEqual({ totalAdditions: 7, totalDeletions: 3, filesChanged: 3 });
+  });
+
+  it('counts the stats of a trimmed file like the full parse', () => {
+    const full = parseDiff(changed).files[0];
+    const trimmed = parseDiff(changed, { maxFilePatchLength: 10 }).files[0];
+    expect(trimmed).toMatchObject({ trimmed: true, hunks: [], additions: full.additions, deletions: full.deletions });
+  });
+
+  it('keeps every file without a limit', () => {
+    const diff = parseDiff(small + big + changed);
+    expect(diff.files.every((file) => !file.trimmed && file.hunks.length > 0)).toBe(true);
   });
 });

@@ -1,7 +1,4 @@
-import { createHash } from 'node:crypto';
-import { mkdirSync } from 'node:fs';
-import { basename, join } from 'node:path';
-import { homedir } from 'node:os';
+import { basename } from 'node:path';
 import { InputError } from './errors.js';
 import { getRepoRoot, git, gitTry } from './exec.js';
 import { verifyCommit } from './refs.js';
@@ -56,18 +53,6 @@ export function getRepoInfo(): RepoInfo {
     branch: getCurrentBranch(),
     root: getRepoRoot(),
   };
-}
-
-export function getDiffityDirPath(): string {
-  const repoRoot = getRepoRoot();
-  const hash = createHash('sha256').update(repoRoot).digest('hex').slice(0, 12);
-  return join(homedir(), '.diffity', hash);
-}
-
-export function getDiffityDir(): string {
-  const dir = getDiffityDirPath();
-  mkdirSync(dir, { recursive: true });
-  return dir;
 }
 
 export function isValidGitRef(ref: string): boolean {

@@ -8,5 +8,6 @@ export type {
   FileStatus,
   LineDiffType,
   ParsedDiff,
+  ParseOptions,
   WordDiffSegment,
 } from './types.js';

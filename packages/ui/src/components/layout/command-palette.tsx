@@ -5,6 +5,7 @@ import { cn } from '../../lib/cn';
 import { highlightSegments } from '../../lib/fuzzy';
 import { rankItems, recentActions, recentFiles, rememberAction, rememberFile, type RankItem } from '../../lib/palette';
 import { isModPressed } from '../../lib/platform';
+import { isModalOpen } from '../../lib/dom-utils';
 import { commitRef, parseCommitRef, refLabel } from '../../lib/refs';
 import { shortcutHint } from '../../lib/shortcuts';
 import { openInEditorWithToast } from '../../lib/toast';
@@ -66,7 +67,7 @@ function usePaletteShortcuts() {
         return;
       }
       const current = getPaletteState().mode;
-      if (!current && document.querySelector('dialog:modal')) {
+      if (!current && isModalOpen()) {
         return;
       }
       event.preventDefault();

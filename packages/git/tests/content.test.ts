@@ -37,7 +37,7 @@ describe('file content', () => {
   it('counts lines including trailing blank ones', () => {
     const head = { type: 'ref', ref: 'HEAD' } as const;
     expect(getFileLineCounts(['spaced.py', 'missing.txt', 'no-eol.txt', 'binary.bin', 'dir', 'sp ace.txt', 'new\nline.txt'], head))
-      .toEqual([6, null, 2, null, null, 1, null]);
+      .toEqual([6, null, 2, null, null, 1, 1]);
     expect(getFileLineCounts([], head)).toEqual([]);
     expect(countLines('')).toBe(0);
     expect(countLines(Buffer.from('a\n\nb'))).toBe(3);

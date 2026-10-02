@@ -1,6 +1,7 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
-import { useLoaderData } from 'react-router';
+import { useLoaderData, useSearchParams } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
+import { toast } from 'sonner';
 import type { ParsedDiff } from '@diffity/parser';
 import { useDiff } from '../../hooks/use-diff';
 import { useInfo } from '../../hooks/use-info';
@@ -9,8 +10,12 @@ import { useKeyboard } from '../../hooks/use-keyboard';
 import { usePaletteActions, usePaletteView, type PaletteAction, type PaletteView } from '../../hooks/use-palette';
 import { useReviewThreads } from '../../hooks/use-review-threads';
 import { useCommentActions } from '../../hooks/use-comment-actions';
+import { useThreadLocations } from '../../hooks/use-thread-locations';
+import { useViewedFiles } from '../../hooks/use-viewed-files';
 import { Toolbar } from '../layout/toolbar';
-import { DiffView, type DiffViewHandle } from './diff-view';
+import { useNavigateToRef } from '../layout/ref-menu';
+import { DiffView, flashThreadElement, type DiffViewHandle } from './diff-view';
+import type { SinceViewedInfo } from './since-viewed';
 import { Sidebar } from '../layout/sidebar';
 import { ShortcutModal } from '../layout/shortcut-modal';
 import { StaleDiffBanner } from '../layout/stale-diff-banner';
@@ -36,21 +41,29 @@ import { SunIcon } from '../icons/sun-icon';
 import { UnifiedViewIcon } from '../icons/unified-view-icon';
 import { RefreshIcon } from '../icons/refresh-icon';
 import { DiffSkeleton } from '../layout/skeleton';
+import { OutsideThreads } from '../comments/outside-threads';
+import { CommentsPanel } from '../comments/comments-panel';
 import { useRevealClass } from '../ui/skeleton';
 import { useDiffStaleness } from '../../hooks/use-diff-staleness';
 import { cn } from '../../lib/cn';
 import { type ViewMode, getFilePath, getAutoCollapsedPaths } from '../../lib/diff-utils';
 import { buildFirstOpenThreadByFile, buildThreadCountsByFile } from '../../lib/comment-navigation';
+import { getOutsideThreads, locateViewThreads } from '../../lib/thread-location';
 import { getHunkHeaders, scrollToElement } from '../../lib/dom-utils';
 import { fetchGitHubDetails, type GitHubDetails } from '../../lib/api';
 import { readViewState, useViewState, writeViewState } from '../../lib/view-state';
 import { shortcutHint } from '../../lib/shortcuts';
+import { readPreference, useSettings, writePreference } from '../../lib/preferences';
 import { setDiffPalette, useDiffPalette } from '../../lib/diff-palette';
+import { initialCollapsed, nextUnviewedFile } from '../../lib/viewed-state';
 import type { FindMatch } from '../../lib/find';
 import type { CommentThread, LineSelection } from '../comments/types';
 import { isThreadResolved } from '../comments/types';
 
 const NO_THREADS: CommentThread[] = [];
+/** The fingerprint each ref's diff was last shown with, to read the file contents again once it changed. */
+const shownFingerprints = new Map<string, string>();
+const COMMENTS_PANEL_PREFERENCE = 'comments-panel';
 const iconClass = 'w-3.5 h-3.5';
 
 function focusFileFilter() {
@@ -65,7 +78,6 @@ function focusFileFilter() {
 interface SavedReview {
   diff: WeakRef<ParsedDiff> | null;
   activeFile: string | null;
-  reviewedFiles: Set<string>;
   collapsedFiles: Set<string>;
   manuallyToggled: Set<string>;
 }
@@ -77,33 +89,86 @@ export function DiffPage() {
     view: 'split' | 'unified' | null;
   }>();
 
-  const [viewMode, setViewMode] = useViewState<ViewMode>('diff:view-mode', initialViewMode || 'split');
-  const [hideWhitespace, setHideWhitespace] = useViewState('diff:hide-whitespace', false);
+  const settings = useSettings();
+  const [viewMode, setViewMode] = useViewState<ViewMode>('diff:view-mode', initialViewMode || settings.diffLayout);
+  const [hideWhitespace, setHideWhitespace] = useViewState('diff:hide-whitespace', settings.hideWhitespace);
+  const [seenDefaults, setSeenDefaults] = useViewState('diff:defaults', settings);
+  // A changed default also applies to the open diff, and to one shown again after it changed.
+  if (seenDefaults.diffLayout !== settings.diffLayout || seenDefaults.hideWhitespace !== settings.hideWhitespace) {
+    setSeenDefaults(settings);
+    if (seenDefaults.diffLayout !== settings.diffLayout) {
+      setViewMode(settings.diffLayout);
+    }
+    if (seenDefaults.hideWhitespace !== settings.hideWhitespace) {
+      setHideWhitespace(settings.hideWhitespace);
+    }
+  }
   const [showHelp, setShowHelp] = useState(false);
   const [refMenuOpen, setRefMenuOpen] = useState(false);
+  const [commentsOpen, setCommentsOpen] = useState(() => readPreference(COMMENTS_PANEL_PREFERENCE) === 'open');
+  const [searchParams] = useSearchParams();
+  const navigateToRef = useNavigateToRef();
   const { theme, toggleTheme } = useTheme(initialTheme);
   const diffPalette = useDiffPalette();
-  const { data: diff, error } = useDiff(hideWhitespace, refParam);
+  const [showHidden, setShowHidden] = useViewState('diff:show-hidden', false);
+  const { data: diff, error, dataUpdatedAt: diffVersion } = useDiff(hideWhitespace, refParam, showHidden);
   const { data: info } = useInfo(refParam);
   const reviewKey = `diff:${refParam}:review`;
   const [saved] = useState(() => readViewState<SavedReview | null>(reviewKey, null));
   const [activeFile, setActiveFile] = useState<string | null>(saved?.activeFile ?? null);
-  const [reviewedFiles, setReviewedFiles] = useState<Set<string>>(saved?.reviewedFiles ?? new Set());
   const [collapsedFiles, setCollapsedFiles] = useState<Set<string>>(saved?.collapsedFiles ?? new Set());
   const manuallyToggledRef = useRef<Set<string>>(saved?.manuallyToggled ?? new Set());
   const [pendingSelection, setPendingSelection] = useState<LineSelection | null>(null);
-  const [findFile, setFindFile] = useState<string | null>(null);
+  const [findMatch, setFindMatch] = useState<FindMatch | null>(null);
   const [findRequest, setFindRequest] = useState(0);
   const [generalCommentRequest, setGeneralCommentRequest] = useState(0);
   const mainRef = useRef<HTMLElement | null>(null);
   const diffViewRef = useRef<DiffViewHandle>(null);
   const currentFileIdx = useRef(0);
   const initializedDiffRef = useRef<ParsedDiff | null>(saved?.diff?.deref() ?? null);
+  const commentedSeenRef = useRef<Set<string> | null>(null);
+  const changedSeenRef = useRef<Set<string> | null>(null);
 
   const reviewsEnabled = !!info?.capabilities?.reviews;
   const sessionId = info?.sessionId ?? null;
   const canRevert = !!info?.capabilities?.revert;
-  const { isStale, resetStaleness } = useDiffStaleness(diff.fingerprint, refParam, !!info?.capabilities?.staleness);
+  const filePaths = useMemo(() => diff.files.map((file) => getFilePath(file)), [diff]);
+  const {
+    viewedFiles: reviewedFiles,
+    changedFiles,
+    setViewed,
+    loading: viewedLoading,
+    settled: viewedSettled,
+  } = useViewedFiles(sessionId, filePaths, diffVersion);
+  const changedSinceViewed = useMemo(() => new Set(changedFiles.keys()), [changedFiles]);
+  const sinceViewedFiles = useMemo(() => {
+    const map = new Map<string, SinceViewedInfo>();
+    if (sessionId) {
+      for (const [path, mark] of changedFiles) {
+        map.set(path, { sessionId, canDiff: mark.kept, version: `${mark.blob}..${mark.current}` });
+      }
+    }
+    return map;
+  }, [sessionId, changedFiles]);
+  const [sinceViewedShown, setSinceViewedShown] = useState<Set<string>>(() => new Set());
+  if ([...sinceViewedShown].some((path) => !sinceViewedFiles.has(path))) {
+    setSinceViewedShown(new Set([...sinceViewedShown].filter((path) => sinceViewedFiles.has(path))));
+  }
+  const handleShowSinceViewedChange = useCallback((path: string, show: boolean) => {
+    setSinceViewedShown((prev) => {
+      if (prev.has(path) === show) {
+        return prev;
+      }
+      const next = new Set(prev);
+      if (show) {
+        next.add(path);
+      } else {
+        next.delete(path);
+      }
+      return next;
+    });
+  }, []);
+  const { isStale, resetStaleness } = useDiffStaleness(diff.fingerprint, refParam, showHidden, !!info?.capabilities?.staleness);
   const [githubDetails, setGithubDetails] = useState<GitHubDetails | null>(null);
 
   useEffect(() => {
@@ -119,6 +184,19 @@ export function DiffPage() {
   const threads = reviewsEnabled && serverThreads ? serverThreads : NO_THREADS;
   const commentActions = useCommentActions(sessionId, reviewsEnabled);
   const commentCountsByFile = useMemo(() => buildThreadCountsByFile(threads), [threads]);
+  const threadLocations = useThreadLocations(reviewsEnabled ? sessionId : null, threads, diffVersion);
+  const outsideThreads = useMemo(() => getOutsideThreads(threads, diff), [threads, diff]);
+  const viewThreads = useMemo(
+    () => locateViewThreads(threads, threadLocations, outsideThreads, { sessionId: sessionId ?? '', ref: refParam, empty: diff.files.length === 0 }),
+    [threads, threadLocations, outsideThreads, sessionId, refParam, diff],
+  );
+  const openThreadCount = useMemo(() => threads.filter((thread) => thread.status === 'open').length, [threads]);
+
+  const toggleComments = useCallback(() => setCommentsOpen((open) => !open), []);
+
+  useEffect(() => {
+    writePreference(COMMENTS_PANEL_PREFERENCE, commentsOpen ? 'open' : null);
+  }, [commentsOpen]);
 
   const filesWithComments = useMemo(() => {
     return new Set(commentCountsByFile.keys());
@@ -134,50 +212,63 @@ export function DiffPage() {
     setPendingSelection(null);
   }, [commentActions]);
 
+  const threadsLoading = reviewsEnabled && !threadsFetched;
+  const layoutReady = !threadsLoading && viewedSettled;
+
+  // Lays out a new diff once its comments and viewed marks are in, and opens files that changed since viewed.
   useEffect(() => {
-    if (!diff || diff === initializedDiffRef.current) {
+    if (!layoutReady) {
       return;
     }
-    initializedDiffRef.current = diff;
-
-    const autoCollapsed = getAutoCollapsedPaths(diff.files);
-    for (const path of filesWithComments) {
-      autoCollapsed.delete(path);
+    const seen = changedSeenRef.current;
+    changedSeenRef.current = changedSinceViewed;
+    const newlyChanged = seen ? [...changedSinceViewed].filter((path) => !seen.has(path)) : [];
+    for (const path of newlyChanged) {
+      manuallyToggledRef.current.delete(path);
     }
-    for (const path of manuallyToggledRef.current) {
-      if (autoCollapsed.has(path)) {
-        autoCollapsed.delete(path);
-      } else {
-        autoCollapsed.add(path);
-      }
+    if (diff !== initializedDiffRef.current) {
+      initializedDiffRef.current = diff;
+      commentedSeenRef.current = filesWithComments;
+      const viewedState = { viewed: reviewedFiles, changed: changedFiles };
+      setCollapsedFiles(initialCollapsed(filePaths, getAutoCollapsedPaths(diff.files), filesWithComments, viewedState, manuallyToggledRef.current));
+      return;
     }
-    setCollapsedFiles(autoCollapsed);
-  }, [diff]);
+    if (newlyChanged.length > 0) {
+      setCollapsedFiles((prev) => {
+        const next = new Set(prev);
+        for (const path of newlyChanged) {
+          next.delete(path);
+        }
+        return next;
+      });
+    }
+  }, [diff, layoutReady, changedSinceViewed]);
 
   useEffect(() => {
     writeViewState(reviewKey, {
       diff: initializedDiffRef.current && new WeakRef(initializedDiffRef.current),
       activeFile,
-      reviewedFiles,
       collapsedFiles,
       manuallyToggled: manuallyToggledRef.current,
     } satisfies SavedReview);
-  }, [reviewKey, activeFile, reviewedFiles, collapsedFiles]);
+  }, [reviewKey, activeFile, collapsedFiles]);
 
   useEffect(() => {
-    if (filesWithComments.size === 0) {
+    const seen = commentedSeenRef.current;
+    commentedSeenRef.current = filesWithComments;
+    if (!seen) {
       return;
     }
+    const added = [...filesWithComments].filter((path) => !seen.has(path));
     setCollapsedFiles((prev) => {
-      let changed = false;
-      const next = new Set(prev);
-      for (const path of filesWithComments) {
-        if (next.has(path)) {
-          next.delete(path);
-          changed = true;
-        }
+      if (!added.some((path) => prev.has(path))) {
+        return prev;
       }
-      return changed ? next : prev;
+      const next = new Set(prev);
+      for (const path of added) {
+        next.delete(path);
+      }
+      return next;
     });
   }, [filesWithComments]);
 
@@ -200,7 +291,9 @@ export function DiffPage() {
   }, []);
 
   const handleReviewedChange = useCallback((path: string, reviewed: boolean) => {
-    setReviewedFiles((prev) => {
+    setViewed([path], reviewed);
+    manuallyToggledRef.current.delete(path);
+    setCollapsedFiles((prev) => {
       const next = new Set(prev);
       if (reviewed) {
         next.add(path);
@@ -209,20 +302,7 @@ export function DiffPage() {
       }
       return next;
     });
-    if (reviewed) {
-      setCollapsedFiles((prev) => {
-        const next = new Set(prev);
-        next.add(path);
-        return next;
-      });
-    } else {
-      setCollapsedFiles((prev) => {
-        const next = new Set(prev);
-        next.delete(path);
-        return next;
-      });
-    }
-  }, []);
+  }, [setViewed]);
 
   const setAllCollapsed = useCallback((collapsed: boolean) => {
     if (!diff) {
@@ -233,11 +313,11 @@ export function DiffPage() {
   }, [diff]);
 
   const setAllReviewed = useCallback((reviewed: boolean) => {
-    if (!diff) {
-      return;
+    const paths = filePaths.filter((path) => (reviewed ? !reviewedFiles.has(path) : reviewedFiles.has(path) || changedFiles.has(path)));
+    setViewed(paths, reviewed);
+    for (const path of paths) {
+      manuallyToggledRef.current.delete(path);
     }
-    const paths = diff.files.map((f) => getFilePath(f));
-    setReviewedFiles(reviewed ? new Set(paths) : new Set());
     setCollapsedFiles((prev) => {
       const next = new Set(prev);
       for (const path of paths) {
@@ -249,14 +329,16 @@ export function DiffPage() {
       }
       return next;
     });
-  }, [diff, reviewedFiles]);
+  }, [filePaths, reviewedFiles, changedFiles, setViewed]);
 
-  const getCurrentFilePath = useCallback((): string | null => {
-    if (!diff) {
-      return null;
+  const getCurrentFilePath = useCallback((): string | null => filePaths[currentFileIdx.current] ?? null, [filePaths]);
+
+  useEffect(() => {
+    const index = activeFile ? filePaths.indexOf(activeFile) : -1;
+    if (index >= 0) {
+      currentFileIdx.current = index;
     }
-    return getFilePath(diff.files[currentFileIdx.current]);
-  }, [diff]);
+  }, [activeFile, filePaths]);
 
   const navigateFile = useCallback((direction: number) => {
     if (!diff) {
@@ -289,6 +371,14 @@ export function DiffPage() {
     scrollToElement(target);
   }, []);
 
+  const toggleViewed = useCallback((path: string) => {
+    const wasReviewed = reviewedFiles.has(path);
+    handleReviewedChange(path, !wasReviewed);
+    if (!wasReviewed) {
+      navigateFile(1);
+    }
+  }, [reviewedFiles, handleReviewedChange, navigateFile]);
+
   useKeyboard({
     onNextFile: () => navigateFile(1),
     onPrevFile: () => navigateFile(-1),
@@ -308,24 +398,38 @@ export function DiffPage() {
     },
     onToggleReviewed: () => {
       const path = getCurrentFilePath();
-      if (!path) {
-        return;
-      }
-      const wasReviewed = reviewedFiles.has(path);
-      handleReviewedChange(path, !wasReviewed);
-      if (!wasReviewed) {
-        navigateFile(1);
+      if (path) {
+        toggleViewed(path);
       }
     },
+    onMarkAllViewed: () => setAllReviewed(true),
+    onNextUnviewed: () => goToNextUnviewed(),
     onUnifiedView: () => setViewMode('unified'),
     onSplitView: () => setViewMode('split'),
     onShowHelp: () => setShowHelp(true),
     onOpenRefMenu: () => setRefMenuOpen(true),
+    onToggleComments: () => {
+      if (reviewsEnabled) {
+        toggleComments();
+      }
+    },
     onFocusSearch: focusFileFilter,
     onEscape: () => setShowHelp(false),
   });
 
   const queryClient = useQueryClient();
+  const diffSource = useMemo(
+    () => ({ ref: refParam, hideWhitespace, showHidden, fingerprint: diff.fingerprint }),
+    [refParam, hideWhitespace, showHidden, diff.fingerprint],
+  );
+
+  useEffect(() => {
+    const shown = shownFingerprints.get(refParam);
+    shownFingerprints.set(refParam, diff.fingerprint);
+    if (shown !== undefined && shown !== diff.fingerprint) {
+      queryClient.invalidateQueries({ queryKey: ['file-content'] });
+    }
+  }, [refParam, diff.fingerprint, queryClient]);
 
   const handleRevert = useCallback(() => {
     queryClient.invalidateQueries({ queryKey: ['diff'] });
@@ -345,8 +449,9 @@ export function DiffPage() {
     diffViewRef.current?.scrollToFile(path);
   }, []);
 
-  const handleScrollToThread = useCallback((threadId: string, filePath: string) => {
+  const handleScrollToThread = useCallback((threadId: string, filePath: string, onRevealed?: () => void) => {
     setActiveFile(filePath);
+    handleShowSinceViewedChange(filePath, false);
     setCollapsedFiles((prev) => {
       if (!prev.has(filePath)) {
         return prev;
@@ -355,8 +460,34 @@ export function DiffPage() {
       next.delete(filePath);
       return next;
     });
-    diffViewRef.current?.scrollToThread(threadId, filePath);
-  }, []);
+    if (diffViewRef.current) {
+      diffViewRef.current.scrollToThread(threadId, filePath, onRevealed);
+      return;
+    }
+    const element = document.querySelector(`[data-thread-id="${CSS.escape(threadId)}"]`);
+    if (element) {
+      element.scrollIntoView({ behavior: 'instant', block: 'center' });
+      flashThreadElement(element);
+      onRevealed?.();
+    }
+  }, [handleShowSinceViewedChange]);
+
+  const focusThreadId = searchParams.get('thread');
+  const focusedThreadRef = useRef<string | null>(null);
+  // Waits for the diff to be laid out, and keeps the link until the thread is in view.
+  useEffect(() => {
+    if (!focusThreadId || !layoutReady || focusedThreadRef.current === focusThreadId) {
+      return;
+    }
+    const clearLink = () => navigateToRef(refParam, { replace: true });
+    const thread = threads.find((t) => t.id === focusThreadId);
+    if (!thread) {
+      clearLink();
+      return;
+    }
+    focusedThreadRef.current = focusThreadId;
+    handleScrollToThread(thread.id, thread.filePath, clearLink);
+  }, [focusThreadId, layoutReady, threads, handleScrollToThread, navigateToRef, refParam]);
 
   const handleSidebarCommentedFileClick = useCallback((path: string) => {
     const threadId = firstOpenThreadByFile.get(path);
@@ -372,7 +503,8 @@ export function DiffPage() {
   }, []);
 
   const handleFindReveal = useCallback((match: FindMatch) => {
-    setFindFile(match.scope);
+    setFindMatch(match);
+    handleShowSinceViewedChange(match.scope, false);
     setCollapsedFiles((prev) => {
       if (!prev.has(match.scope)) {
         return prev;
@@ -382,9 +514,9 @@ export function DiffPage() {
       return next;
     });
     diffViewRef.current?.scrollToLine(match.scope, match.key);
-  }, []);
+  }, [handleShowSinceViewedChange]);
 
-  const handleFindClose = useCallback(() => setFindFile(null), []);
+  const handleFindClose = useCallback(() => setFindMatch(null), []);
 
   const handleRevealFile = useCallback((path: string) => {
     const index = diff?.files.findIndex((f) => getFilePath(f) === path) ?? -1;
@@ -401,6 +533,15 @@ export function DiffPage() {
     });
     handleSidebarFileClick(path);
   }, [diff, handleSidebarFileClick]);
+
+  const goToNextUnviewed = useCallback(() => {
+    const path = nextUnviewedFile(filePaths, currentFileIdx.current, reviewedFiles);
+    if (path) {
+      handleRevealFile(path);
+    } else if (filePaths.length > 0) {
+      toast.success('All files viewed');
+    }
+  }, [filePaths, reviewedFiles, handleRevealFile]);
 
   const paletteView = useMemo<PaletteView | null>(() => {
     if (!diff || !info) {
@@ -428,8 +569,9 @@ export function DiffPage() {
   usePaletteView(paletteView);
 
   const paletteActions = useMemo<PaletteAction[]>(() => {
-    const paths = diff?.files.map((f) => getFilePath(f)) ?? [];
+    const paths = filePaths;
     const hasFiles = paths.length > 0;
+    const currentFile = (activeFile && paths.includes(activeFile) ? activeFile : paths[0]) ?? null;
     const anyExpanded = paths.some((path) => !collapsedFiles.has(path));
     const list: PaletteAction[] = [];
     if (hasFiles) {
@@ -437,15 +579,37 @@ export function DiffPage() {
         { id: 'find', title: 'Find in diff', hint: shortcutHint('find'), keywords: 'search text', icon: <SearchIcon className={iconClass} />, run: () => setFindRequest((n) => n + 1) },
         { id: 'filter-files', title: 'Filter files', hint: shortcutHint('filter-files'), keywords: 'sidebar search', icon: <SearchIcon className={iconClass} />, run: focusFileFilter },
       );
-      if (!paths.every((path) => reviewedFiles.has(path))) {
-        list.push({ id: 'mark-all-viewed', title: 'Mark all files as viewed', keywords: 'reviewed', icon: <CheckIcon className={iconClass} />, run: () => setAllReviewed(true) });
+      if (currentFile) {
+        const name = currentFile.split('/').pop();
+        list.push({
+          id: 'toggle-viewed',
+          title: reviewedFiles.has(currentFile) ? `Mark ${name} as not viewed` : `Mark ${name} as viewed`,
+          hint: shortcutHint('toggle-viewed'),
+          keywords: 'reviewed current file',
+          icon: <CheckIcon className={iconClass} />,
+          run: () => toggleViewed(currentFile),
+        });
       }
-      if (paths.some((path) => reviewedFiles.has(path))) {
+      if (!paths.every((path) => reviewedFiles.has(path))) {
+        list.push({ id: 'mark-all-viewed', title: 'Mark all files as viewed', hint: shortcutHint('mark-all-viewed'), keywords: 'reviewed', icon: <CheckIcon className={iconClass} />, run: () => setAllReviewed(true) });
+      }
+      if (paths.some((path) => reviewedFiles.has(path) || changedFiles.has(path))) {
         list.push({ id: 'unmark-all-viewed', title: 'Mark all files as not viewed', keywords: 'reviewed unviewed', icon: <CheckIcon className={iconClass} />, run: () => setAllReviewed(false) });
       }
       if (reviewsEnabled) {
         list.push({ id: 'general-comment', title: 'Add general comment', group: 'Comments', keywords: 'review note', icon: <CommentIcon className={iconClass} />, run: () => setGeneralCommentRequest((n) => n + 1) });
       }
+    }
+    if (reviewsEnabled) {
+      list.push({
+        id: 'comments-panel',
+        title: commentsOpen ? 'Hide comments panel' : 'Show comments panel',
+        group: 'Comments',
+        hint: shortcutHint('comments-panel'),
+        keywords: 'threads outdated all views list',
+        icon: <CommentIcon className={iconClass} />,
+        run: toggleComments,
+      });
     }
     list.push(
       { id: 'reload', title: 'Reload diff', keywords: 'refresh', icon: <RefreshIcon className={iconClass} />, run: handleRefreshDiff },
@@ -496,19 +660,32 @@ export function DiffPage() {
       list.push(
         { id: 'file-next', title: 'Next file', group: 'Go to', hint: shortcutHint('file-next'), icon: <ArrowDownIcon />, run: () => navigateFile(1) },
         { id: 'file-prev', title: 'Previous file', group: 'Go to', hint: shortcutHint('file-prev'), icon: <ArrowUpIcon />, run: () => navigateFile(-1) },
+      );
+      if (!paths.every((path) => reviewedFiles.has(path))) {
+        list.push({
+          id: 'file-next-unviewed',
+          title: 'Next unviewed file',
+          group: 'Go to',
+          hint: shortcutHint('file-next-unviewed'),
+          keywords: 'viewed reviewed changed since',
+          icon: <ArrowDownIcon />,
+          run: goToNextUnviewed,
+        });
+      }
+      list.push(
         { id: 'hunk-next', title: 'Next changed hunk', group: 'Go to', hint: shortcutHint('hunk-next'), icon: <ChevronDownIcon className={iconClass} />, run: () => navigateHunk(1) },
         { id: 'hunk-prev', title: 'Previous changed hunk', group: 'Go to', hint: shortcutHint('hunk-prev'), icon: <ChevronUpIcon className={iconClass} />, run: () => navigateHunk(-1) },
       );
     }
     return list;
   }, [
-    diff, viewMode, setViewMode, hideWhitespace, setHideWhitespace, theme, toggleTheme, diffPalette, handleRefreshDiff,
-    collapsedFiles, reviewedFiles, navigateFile, navigateHunk, setAllCollapsed, setAllReviewed, reviewsEnabled,
+    filePaths, activeFile, viewMode, setViewMode, hideWhitespace, setHideWhitespace, theme, toggleTheme, diffPalette,
+    handleRefreshDiff, collapsedFiles, reviewedFiles, changedFiles, navigateFile, navigateHunk, setAllCollapsed,
+    setAllReviewed, toggleViewed, goToNextUnviewed, reviewsEnabled, commentsOpen, toggleComments,
   ]);
   usePaletteActions('diff', paletteActions);
 
-  const threadsLoading = reviewsEnabled && !threadsFetched;
-  const reveal = useRevealClass(threadsLoading);
+  const reveal = useRevealClass(threadsLoading || viewedLoading);
 
   if (error) {
     return (
@@ -521,7 +698,7 @@ export function DiffPage() {
     );
   }
 
-  if (threadsLoading) {
+  if (threadsLoading || viewedLoading) {
     return <DiffSkeleton />;
   }
 
@@ -547,73 +724,107 @@ export function DiffPage() {
         githubDetails={githubDetails}
         sessionId={sessionId}
         onGitHubPulled={() => queryClient.invalidateQueries({ queryKey: ['threads'] })}
+        hiddenFiles={{ files: diff.hiddenFiles ?? [], showing: showHidden, onShowingChange: setShowHidden }}
+        commentsPanel={reviewsEnabled ? { open: commentsOpen, openCount: openThreadCount, onToggle: toggleComments } : undefined}
       />
       {isStale && <StaleDiffBanner onRefresh={handleRefreshDiff} />}
-      {diff.files.length === 0 ? (
-        <div className="flex flex-1 flex-col items-center justify-center gap-2">
-          <div className="text-added opacity-40 mb-1">
-            <CheckCircleIcon />
-          </div>
-          <h2 className="text-base font-medium text-text-secondary">No changes found</h2>
-          <p className="text-xs text-text-muted">There are no differences to display.</p>
-          <button
-            className="mt-3 px-3 py-1 bg-bg-tertiary rounded-md text-xs text-text-secondary hover:bg-hover hover:text-text transition-colors cursor-pointer"
-            onClick={() => setRefMenuOpen(true)}
-          >
-            Choose what to review
-          </button>
-        </div>
-      ) : (
-        <div className="flex flex-1 overflow-hidden">
-          <Sidebar
-            files={diff?.files || []}
-            activeFile={activeFile}
-            reviewedFiles={reviewedFiles}
-            commentCountsByFile={commentCountsByFile}
-            repoRoot={info.root}
-            editor={!!info.editor}
-            diffRef={refParam}
-            onFileClick={handleSidebarFileClick}
-            onCommentedFileClick={handleSidebarCommentedFileClick}
-          />
-          {diff ? (
-            <div className="relative flex flex-1 min-w-0">
-              <FindBar
-                files={diff.files}
-                activeFile={activeFile}
-                onReveal={handleFindReveal}
-                onClose={handleFindClose}
-                openRequest={findRequest}
-              />
-              <DiffView
-                diff={diff}
-                viewMode={viewMode}
-                theme={theme}
-                collapsedFiles={collapsedFiles}
-                onToggleCollapse={handleToggleCollapse}
-                reviewedFiles={reviewedFiles}
-                onReviewedChange={handleReviewedChange}
-                onActiveFileChange={handleActiveFileFromScroll}
-                handle={diffViewRef}
-                baseRef={refParam}
-                canRevert={canRevert}
-                onRevert={handleRevert}
-                scrollRef={(node) => {
-                  mainRef.current = node;
-                }}
-                threads={threads}
-                commentsEnabled={reviewsEnabled}
-                commentActions={commentActions}
-                onAddThread={handleAddThread}
-                pendingSelection={pendingSelection}
-                onPendingSelectionChange={setPendingSelection}
-                findFile={findFile}
-                generalCommentRequest={generalCommentRequest}
-              />
+      <div className="flex flex-1 overflow-hidden">
+        {diff.files.length === 0 ? (
+          <div className="flex flex-1 flex-col items-center justify-center gap-2 overflow-y-auto p-6">
+            <div className="text-added opacity-40 mb-1">
+              <CheckCircleIcon />
             </div>
-          ) : null}
-        </div>
-      )}
+            <h2 className="text-base font-medium text-text-secondary">No changes found</h2>
+            <p className="text-xs text-text-muted">
+              {diff.hiddenFiles?.length
+                ? `${diff.hiddenFiles.length} changed file${diff.hiddenFiles.length === 1 ? ' is' : 's are'} hidden by .diffityignore.`
+                : 'There are no differences to display.'}
+            </p>
+            <button
+              className="mt-3 px-3 py-1 bg-bg-tertiary rounded-md text-xs text-text-secondary hover:bg-hover hover:text-text transition-colors cursor-pointer"
+              onClick={() => setRefMenuOpen(true)}
+            >
+              Choose what to review
+            </button>
+            {reviewsEnabled && (
+              <OutsideThreads
+                threads={outsideThreads}
+                locations={threadLocations}
+                commentActions={commentActions}
+                viewEmpty
+                className="mt-6 w-full max-w-[760px] rounded-lg border overflow-hidden"
+              />
+            )}
+          </div>
+        ) : (
+          <>
+            <Sidebar
+              files={diff?.files || []}
+              activeFile={activeFile}
+              reviewedFiles={reviewedFiles}
+              changedSinceViewed={changedSinceViewed}
+              commentCountsByFile={commentCountsByFile}
+              repoRoot={info.root}
+              editor={!!info.editor}
+              diffRef={refParam}
+              onFileClick={handleSidebarFileClick}
+              onCommentedFileClick={handleSidebarCommentedFileClick}
+            />
+            {diff ? (
+              <div className="relative flex flex-1 min-w-0">
+                <FindBar
+                  files={diff.files}
+                  source={diffSource}
+                  activeFile={activeFile}
+                  onReveal={handleFindReveal}
+                  onClose={handleFindClose}
+                  openRequest={findRequest}
+                />
+                <DiffView
+                  diff={diff}
+                  viewMode={viewMode}
+                  theme={theme}
+                  collapsedFiles={collapsedFiles}
+                  onToggleCollapse={handleToggleCollapse}
+                  reviewedFiles={reviewedFiles}
+                  sinceViewedFiles={sinceViewedFiles}
+                  sinceViewedShown={sinceViewedShown}
+                  onShowSinceViewedChange={handleShowSinceViewedChange}
+                  onReviewedChange={handleReviewedChange}
+                  onActiveFileChange={handleActiveFileFromScroll}
+                  handle={diffViewRef}
+                  baseRef={refParam}
+                  source={diffSource}
+                  canRevert={canRevert}
+                  onRevert={handleRevert}
+                  scrollRef={(node) => {
+                    mainRef.current = node;
+                  }}
+                  threads={threads}
+                  outsideThreads={outsideThreads}
+                  threadLocations={threadLocations}
+                  commentsEnabled={reviewsEnabled}
+                  commentActions={commentActions}
+                  onAddThread={handleAddThread}
+                  pendingSelection={pendingSelection}
+                  onPendingSelectionChange={setPendingSelection}
+                  findMatch={findMatch}
+                  generalCommentRequest={generalCommentRequest}
+                />
+              </div>
+            ) : null}
+          </>
+        )}
+        {reviewsEnabled && sessionId && commentsOpen && (
+          <CommentsPanel
+            sessionId={sessionId}
+            viewThreads={viewThreads}
+            branch={info?.branch || null}
+            onScrollToThread={handleScrollToThread}
+            onClose={toggleComments}
+          />
+        )}
+      </div>
       {showHelp && <ShortcutModal onClose={() => setShowHelp(false)} />}
     </div>
   );

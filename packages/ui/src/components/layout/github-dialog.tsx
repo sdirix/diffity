@@ -114,6 +114,9 @@ export function GitHubDialog(props: GitHubDialogProps) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={onClose}>
       <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="GitHub pull request"
         className="bg-bg rounded-xl shadow-lg w-full max-w-sm mx-4 font-sans"
         onClick={e => e.stopPropagation()}
       >

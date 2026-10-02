@@ -1,4 +1,5 @@
-export type FileStatus = 'added' | 'deleted' | 'modified' | 'renamed' | 'copied';
+/** `conflicted` is an unmerged path, listed without hunks. */
+export type FileStatus = 'added' | 'deleted' | 'modified' | 'renamed' | 'copied' | 'conflicted';
 
 export type LineDiffType = 'equal' | 'insert' | 'delete';
 
@@ -40,6 +41,8 @@ export interface DiffFile {
   newMode?: string;
   similarityIndex?: number;
   oldFileLineCount?: number;
+  /** The patch was too long to include: `hunks` is empty, `additions` and `deletions` still count its lines. */
+  trimmed?: boolean;
 }
 
 export interface ParsedDiff {
@@ -49,4 +52,9 @@ export interface ParsedDiff {
     totalDeletions: number;
     filesChanged: number;
   };
+}
+
+export interface ParseOptions {
+  /** Files whose patch has more characters than this come without hunks and with `trimmed` set. */
+  maxFilePatchLength?: number;
 }

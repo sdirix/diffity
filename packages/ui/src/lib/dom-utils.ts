@@ -1,3 +1,8 @@
+/** Whether a modal dialog is open, which owns the keyboard while it is. */
+export function isModalOpen(): boolean {
+  return !!document.querySelector('dialog:modal, [aria-modal="true"]');
+}
+
 export function getFileBlocks(): HTMLElement[] {
   return Array.from(document.querySelectorAll('[id^="file-"]'));
 }

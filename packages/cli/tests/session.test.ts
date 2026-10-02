@@ -27,19 +27,17 @@ afterEach(() => {
 });
 
 describe('isBranchRelative', () => {
-  const tags = (name: string) => name.startsWith('v');
-
   it('scopes views that depend on the checked out branch', () => {
     for (const ref of ['work', '.', 'staged', 'unstaged', 'main', 'origin/main', 'HEAD~1', 'HEAD~2..HEAD',
-      'abc1234..HEAD', 'origin/main...HEAD', 'main..', '...main', '@~1', 'main...@', 'HEAD@{1}']) {
-      expect(isBranchRelative(ref, tags), ref).toBe(true);
+      'abc1234..HEAD', 'origin/main...HEAD', 'main..', '...main', '@~1', 'main...@', 'HEAD@{1}',
+      'abc1234', 'abc1234~1', 'v1.0.0', 'v1.0.0^']) {
+      expect(isBranchRelative(ref), ref).toBe(true);
     }
   });
 
   it('shares views that read the same on every branch', () => {
-    for (const ref of [TREE_REF, 'abc1234', 'abc1234~1', 'v1.0.0', 'v1.0.0^', 'abc1234~1..abc1234',
-      'main..feature', 'v1.0.0...v2.0.0']) {
-      expect(isBranchRelative(ref, tags), ref).toBe(false);
+    for (const ref of [TREE_REF, 'abc1234~1..abc1234', 'main..feature', 'v1.0.0...v2.0.0']) {
+      expect(isBranchRelative(ref), ref).toBe(false);
     }
   });
 });
@@ -72,14 +70,25 @@ describe('findOrCreateSession', () => {
     expect(findOrCreateSession('work').id).toBe(onMain.id);
   });
 
-  it('shares views of fixed commits and the file browser between branches', () => {
-    const sha = head();
-    const commit = findOrCreateSession(sha);
+  it('shares ranges between named commits and the file browser between branches', () => {
+    repo.write('a.txt', 'second\n');
+    repo.commit('second');
+    const range = 'main~1..main';
+    const shared = findOrCreateSession(range);
     const tree = findOrCreateSession(TREE_REF);
     repo.git('checkout', '-q', '-b', 'feature');
-    expect(findOrCreateSession(sha).id).toBe(commit.id);
+    expect(findOrCreateSession(range).id).toBe(shared.id);
     expect(findOrCreateSession(TREE_REF).id).toBe(tree.id);
-    expect(commit.scope).toBe('');
+    expect(shared.scope).toBe('');
+  });
+
+  it('keeps a single commit apart per branch, as it is diffed against the working tree', () => {
+    const sha = head();
+    const onMain = findOrCreateSession(sha);
+    repo.git('checkout', '-q', '-b', 'feature');
+    const onFeature = findOrCreateSession(sha);
+    expect(onFeature.id).not.toBe(onMain.id);
+    expect([onMain.scope, onFeature.scope]).toEqual(['main', 'feature']);
   });
 
   it('scopes a detached HEAD to its commit', () => {
@@ -112,6 +121,24 @@ describe('getCurrentSession', () => {
 });
 
 describe('sessions from before scoping', () => {
+  it('include single ref sessions that were shared by every branch', () => {
+    const sha = head();
+    writeLegacyDb(`
+      ALTER TABLE review_sessions ADD COLUMN scope TEXT;
+      CREATE TABLE viewed_files (session_id TEXT NOT NULL, file_path TEXT NOT NULL, blob TEXT, kept INTEGER NOT NULL DEFAULT 0,
+        viewed_at TEXT NOT NULL DEFAULT (datetime('now')), PRIMARY KEY (session_id, file_path));
+      PRAGMA user_version = 3;
+      INSERT INTO review_sessions (id, ref, head_hash, scope) VALUES
+        ('single', '${sha}', '${sha}', ''),
+        ('range', '${sha}~1..${sha}', '${sha}', ''),
+        ('tree', '__tree__', '${sha}', '');
+    `);
+
+    expect(findOrCreateSession(sha)).toMatchObject({ id: 'single', scope: 'main' });
+    expect(findOrCreateSession(`${sha}~1..${sha}`)).toMatchObject({ id: 'range', scope: '' });
+    expect(findOrCreateSession(TREE_REF)).toMatchObject({ id: 'tree', scope: '' });
+  });
+
   it('are merged per view and adopted by the branch they belong to', () => {
     const first = head();
     repo.write('a.txt', 'main\n');
@@ -151,7 +178,7 @@ describe('sessions from before scoping', () => {
     `);
 
     const onMain = findOrCreateSession('work');
-    expect(onMain.id).toBe('w-main');
+    expect(onMain.id).toBe('w-empty');
     expect(bodies(onMain.id)).toEqual(['first', 'amended away', 'main']);
 
     repo.git('checkout', '-q', 'feature');
@@ -165,9 +192,16 @@ describe('sessions from before scoping', () => {
 
     const sessions = queryAll<{ id: string; scope: string | null }>('SELECT id, scope FROM review_sessions ORDER BY id');
     expect(sessions).toEqual([
+      { id: 't-1', scope: null },
       { id: 't-2', scope: '' },
+      { id: 'w-amended', scope: null },
+      { id: 'w-empty', scope: 'main' },
       { id: 'w-feature', scope: 'feature' },
-      { id: 'w-main', scope: 'main' },
+      { id: 'w-first', scope: null },
+      { id: 'w-main', scope: null },
     ]);
+
+    comment('w-first', 'from an older diffity');
+    expect(bodies('w-first')).toEqual(['from an older diffity']);
   });
 });

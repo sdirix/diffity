@@ -16,6 +16,7 @@ import {
   treeFileContentOptions,
   treeEntriesOptions,
   treeStatusOptions,
+  treeHiddenOptions,
   tourOptions,
 } from '../../queries/tree';
 import { useTheme } from '../../hooks/use-theme';
@@ -43,6 +44,7 @@ import { openInEditorWithToast } from '../../lib/toast';
 import { PencilIcon } from '../icons/pencil-icon';
 import { ViewTabs } from '../layout/view-tabs';
 import { useRestoredScroll } from '../../lib/view-state';
+import { isModalOpen } from '../../lib/dom-utils';
 import { FileViewerSkeleton, FolderSkeleton } from '../layout/skeleton';
 import { useRevealClass } from '../ui/skeleton';
 import { shortcutHint } from '../../lib/shortcuts';
@@ -52,7 +54,6 @@ import { SunIcon } from '../icons/sun-icon';
 import { MoonIcon } from '../icons/moon-icon';
 import { CommentIcon } from '../icons/comment-icon';
 import { ArrowUpIcon } from '../icons/arrow-up-icon';
-import { VscodeIcon } from '../icons/vscode-icon';
 import { XIcon } from '../icons/x-icon';
 
 const NO_THREADS: CommentThread[] = [];
@@ -173,7 +174,8 @@ export function TreePage(props: TreePageProps) {
     const handler = (e: KeyboardEvent) => {
       if (
         e.target instanceof HTMLInputElement ||
-        e.target instanceof HTMLTextAreaElement
+        e.target instanceof HTMLTextAreaElement ||
+        isModalOpen()
       ) {
         return;
       }
@@ -201,6 +203,8 @@ export function TreePage(props: TreePageProps) {
   const sessionId = info?.sessionId ?? null;
   const { data: threads = NO_THREADS } = useReviewThreads(sessionId);
   const { data: statuses } = useQuery(treeStatusOptions());
+  const { data: hiddenPaths } = useQuery(treeHiddenOptions());
+  const diffHidden = useMemo(() => new Set(hiddenPaths), [hiddenPaths]);
   const commentActions = useCommentActions(sessionId, !!sessionId);
 
   const { data: tourData } = useQuery({
@@ -343,6 +347,7 @@ export function TreePage(props: TreePageProps) {
   const handleRefreshTree = useCallback(() => {
     queryClient.invalidateQueries({ queryKey: ['tree-paths'] });
     queryClient.invalidateQueries({ queryKey: ['tree-status'] });
+    queryClient.invalidateQueries({ queryKey: ['tree-hidden'] });
     queryClient.invalidateQueries({ queryKey: ['tree-entries'] });
     queryClient.invalidateQueries({ queryKey: ['tree-file-content'] });
     resetStaleness();
@@ -468,7 +473,7 @@ export function TreePage(props: TreePageProps) {
     openFile: handleFileClick,
     threads,
     openThread: handleScrollToThread,
-    editor: info.editor === 'vscode',
+    editor: !!info.editor,
   }), [info, paths, commentCountsByFile, handleFileClick, threads, handleScrollToThread]);
   usePaletteView(paletteView);
 
@@ -501,8 +506,8 @@ export function TreePage(props: TreePageProps) {
         run: () => setPreviewMode(previewMode === 'preview' ? 'code' : 'preview'),
       });
     }
-    if (info.editor === 'vscode') {
-      list.push({ id: 'open-in-editor', title: `Open ${label} in editor`, keywords: 'vscode code', icon: <VscodeIcon className={iconClass} />, run: () => void openInEditorWithToast(navPath) });
+    if (info.editor) {
+      list.push({ id: 'open-in-editor', title: `Open ${label} in ${info.editor.name}`, keywords: 'editor code', icon: <CodeIcon className={iconClass} />, run: () => void openInEditorWithToast(navPath) });
     }
     if (tourData) {
       list.push({ id: 'close-tour', title: 'Close tour', icon: <XIcon className={iconClass} />, run: handleTourClose });
@@ -566,8 +571,9 @@ export function TreePage(props: TreePageProps) {
           activeFile={isFileMode ? navPath : null}
           commentCountsByFile={commentCountsByFile}
           statuses={statuses}
+          diffHidden={diffHidden}
           repoRoot={info.root}
-          editor={info.editor === 'vscode'}
+          editor={!!info.editor}
           onFileClick={handleFileClick}
           onDirClick={handleDirClick}
           onCommentOnPath={handleCommentOnPath}
@@ -629,13 +635,13 @@ export function TreePage(props: TreePageProps) {
                 />
               </div>
             )}
-            {info?.editor === 'vscode' && (
+            {info?.editor && (
               <button
                 className='ml-3 shrink-0 flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-bg-tertiary text-xs text-text-secondary hover:bg-hover hover:text-text cursor-pointer transition-colors'
                 onClick={() => void openInEditorWithToast(navPath)}
               >
                 <PencilIcon className='w-3 h-3' />
-                Open in Editor
+                Open in {info.editor.name}
               </button>
             )}
           </PathComments>
@@ -668,7 +674,7 @@ export function TreePage(props: TreePageProps) {
                 </div>
               )
             ) : entries.length > 0 ? (
-              <FolderViewer entries={entries} onNavigate={handleNavigate} />
+              <FolderViewer entries={entries} diffHidden={diffHidden} onNavigate={handleNavigate} />
             ) : entriesFetching ? (
               <FolderSkeleton />
             ) : (

@@ -22,6 +22,7 @@ It works with Claude Code, Cursor, Codex, and any AI coding agent.
 | [Learn any topic](#learn-any-topic) | Project-driven learning for programming languages, tools, and frameworks |
 | [GitHub PRs](#github-prs) | Pull down a PR, review it locally, push comments back to GitHub |
 | [Multiple projects](#multiple-projects) | Run it in multiple repos at once, each gets its own port |
+| [More](#more) | Find, command palette, viewed files, comments panel, settings |
 
 ## See your diffs
 
@@ -54,6 +55,14 @@ diffity unstaged                           # only unstaged modifications
 ```
 
 The `--base`/`--compare` flags use the same terminology as GitHub PRs — base is what you're comparing against, compare is the branch with changes. You can also use range syntax (`main..feature`) or just pass two positional args (`diffity main feature`).
+
+To keep generated files out of every diff, add a `.diffityignore` with gitignore patterns at the repo root. Patterns that should stay out of the repo go under Hidden files in the options menu. A negated file shows even inside a hidden folder:
+
+```gitignore
+dist/
+*.generated.ts
+!dist/keep.js
+```
 
 You can leave comments on any diff — working tree changes, branch comparisons, commit ranges. Your agent can also review and leave its own comments. Either way, run `/diffity-resolve` and your agent reads all open comments (yours or its own) and makes the code changes for you.
 
@@ -237,6 +246,20 @@ diffity list               # show all running instances
 diffity list --json        # machine-readable output
 ```
 
+## More
+
+- **Find in the whole diff.** `Ctrl+F` searches every file of the diff, including collapsed and unloaded ones. `Enter` or `Ctrl+G` jumps to the next match.
+- **Pick what to review.** `w` or the picker next to the branch switches between uncommitted, staged and unstaged changes, a commit, a range or a branch.
+- **Command palette.** `Ctrl+K` runs any action and jumps to refs, commits and comments. `Ctrl+P` opens a file.
+- **Viewed files.** `r` marks a file viewed and collapses it. A viewed file that changes again gets a badge, and one click shows only what changed since.
+- **Hide generated files.** Files matched by `.diffityignore`, or by the patterns under Settings, stay out of diffs. The toolbar counts them and shows them on demand.
+- **Comments panel.** `c` lists the comments of this view or of all views, filtered by status and author.
+- **File comments.** Comment on a whole file from its header, next to line and general comments.
+- **Colour-blind colours.** Blue and orange instead of green and red, in light and dark.
+- **Settings.** `Ctrl+,` sets the theme, diff colours, default layout, whitespace, hidden files and the editor that opens files. Hidden files are per repo, the rest is shared by every repo. A custom editor command is only set from the CLI, with `diffity config editor "subl {file}:{line}:{column}"`.
+
+Press `?` for all keyboard shortcuts. On macOS, ⌘ replaces Ctrl.
+
 ## Options
 
 ```
@@ -244,8 +267,8 @@ diffity list --json        # machine-readable output
 --compare <ref>    Ref to compare against base (default: working tree)
 --port <port>      Custom port (default: auto-assigned from 5391)
 --no-open          Don't open browser
---dark             Dark mode
---unified          Unified view (default: split)
+--dark             Dark mode if the theme setting is System
+--unified          Unified view (default: layout setting)
 --quiet            Minimal terminal output
 --new              Stop existing instance and start fresh
 ```

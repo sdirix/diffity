@@ -1,14 +1,9 @@
-import { useState, useLayoutEffect, useCallback, useSyncExternalStore } from 'react';
-import { readPreference, writePreference } from '../lib/preferences';
+import { useCallback, useLayoutEffect, useSyncExternalStore } from 'react';
+import { updateSettings, useSettings, type ThemeSetting } from '../lib/preferences';
 
-type Theme = 'light' | 'dark';
+export type Theme = 'light' | 'dark';
 
-function getStoredTheme(): Theme | null {
-  if (typeof window === 'undefined') {
-    return null;
-  }
-  return readPreference('theme') as Theme | null;
-}
+const DARK_QUERY = '(prefers-color-scheme: dark)';
 
 export function getTheme(): Theme {
   return document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light';
@@ -25,22 +20,34 @@ export function useDocumentTheme(): Theme {
   return useSyncExternalStore(subscribeToTheme, getTheme, () => 'light');
 }
 
+function getSystemTheme(): Theme {
+  return window.matchMedia?.(DARK_QUERY).matches ? 'dark' : 'light';
+}
+
+function subscribeToSystemTheme(onChange: () => void) {
+  const query = window.matchMedia?.(DARK_QUERY);
+  query?.addEventListener('change', onChange);
+  return () => query?.removeEventListener('change', onChange);
+}
+
+/** The theme `setting` shows: its own, or for `system` the one the URL asks for, else the system's. */
+export function resolveTheme(setting: ThemeSetting, requested: Theme | null | undefined, system: Theme): Theme {
+  return setting === 'system' ? requested || system : setting;
+}
+
+/** Applies the theme setting to the document. `initialTheme` is the one the URL asks for. */
 export function useTheme(initialTheme?: Theme | null) {
-  const [theme, setTheme] = useState<Theme>(
-    () => getStoredTheme() || initialTheme || getTheme()
-  );
+  const { theme: setting } = useSettings();
+  const system = useSyncExternalStore(subscribeToSystemTheme, getSystemTheme, () => 'light' as Theme);
+  const theme = resolveTheme(setting, initialTheme, system);
 
   useLayoutEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
   }, [theme]);
 
   const toggleTheme = useCallback(() => {
-    setTheme(prev => {
-      const next = prev === 'light' ? 'dark' : 'light';
-      writePreference('theme', next);
-      return next;
-    });
-  }, []);
+    void updateSettings({ theme: theme === 'light' ? 'dark' : 'light' });
+  }, [theme]);
 
-  return { theme, toggleTheme };
+  return { theme, setting, toggleTheme };
 }

@@ -4,10 +4,13 @@ import type {
   DiffLineType,
   FileStatus,
   ParsedDiff,
+  ParseOptions,
 } from './types.js';
 import { computeWordDiff } from './word-diff.js';
 
 const DIFF_HEADER_PREFIX = 'diff --git ';
+/** The combined diff of an unmerged path, which `git diff` prints instead of a `diff --git` section. */
+const COMBINED_HEADER_RE = /^diff --(?:cc|combined) (.+)$/;
 const DIFF_HEADER_RE = /^a\/(.*) b\/(.*)$/;
 const HUNK_HEADER_RE = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(.*)$/;
 const OLD_FILE_RE = /^--- (.+)$/;
@@ -179,7 +182,24 @@ function attachWordDiffs(hunk: DiffHunk): void {
   }
 }
 
-export function parseDiff(raw: string): ParsedDiff {
+function isSectionHeader(line: string): boolean {
+  return line.startsWith(DIFF_HEADER_PREFIX) || COMBINED_HEADER_RE.test(line);
+}
+
+/** Whether the file section that starts at `lines[start]` is longer than `max` characters. */
+function sectionExceeds(lines: string[], start: number, max: number): boolean {
+  let length = lines[start].length + 1;
+  for (let i = start + 1; i < lines.length && !isSectionHeader(lines[i]); i++) {
+    length += lines[i].length + 1;
+    if (length > max) {
+      return true;
+    }
+  }
+  return length > max;
+}
+
+export function parseDiff(raw: string, options: ParseOptions = {}): ParsedDiff {
+  const { maxFilePatchLength } = options;
   const lines = raw.split('\n');
   const files: DiffFile[] = [];
   let currentFile: DiffFile | null = null;
@@ -192,38 +212,27 @@ export function parseDiff(raw: string): ParsedDiff {
 
   function addHunkLine(hunk: DiffHunk, file: DiffFile, line: string): void {
     const prefix = line[0];
-    const content = line.slice(1);
+    const type: DiffLineType = prefix === '+' ? 'add' : prefix === '-' ? 'delete' : 'context';
 
-    if (prefix === '+') {
+    if (!file.trimmed) {
       hunk.lines.push({
-        type: 'add',
-        content,
-        oldLineNumber: null,
-        newLineNumber: newLineNum,
+        type,
+        content: line.slice(1),
+        oldLineNumber: type === 'add' ? null : oldLineNum,
+        newLineNumber: type === 'delete' ? null : newLineNum,
       });
+    }
+    if (type === 'add') {
       file.additions++;
-      newLineNum++;
-      newRemaining--;
-    } else if (prefix === '-') {
-      hunk.lines.push({
-        type: 'delete',
-        content,
-        oldLineNumber: oldLineNum,
-        newLineNumber: null,
-      });
+    } else if (type === 'delete') {
       file.deletions++;
+    }
+    if (type !== 'add') {
       oldLineNum++;
       oldRemaining--;
-    } else {
-      hunk.lines.push({
-        type: 'context',
-        content,
-        oldLineNumber: oldLineNum,
-        newLineNumber: newLineNum,
-      });
-      oldLineNum++;
+    }
+    if (type !== 'delete') {
       newLineNum++;
-      oldRemaining--;
       newRemaining--;
     }
   }
@@ -235,6 +244,22 @@ export function parseDiff(raw: string): ParsedDiff {
     if (currentFile && currentHunk && (oldRemaining > 0 || newRemaining > 0) && HUNK_LINE_RE.test(line)) {
       addHunkLine(currentHunk, currentFile, line);
       i++;
+      continue;
+    }
+
+    const combined = line.match(COMBINED_HEADER_RE);
+    if (combined) {
+      if (currentFile) {
+        files.push(currentFile);
+      }
+      const path = parsePath(combined[1]);
+      files.push({ oldPath: path, newPath: path, status: 'conflicted', hunks: [], additions: 0, deletions: 0, isBinary: false });
+      currentFile = null;
+      currentHunk = null;
+      i++;
+      while (i < lines.length && !isSectionHeader(lines[i])) {
+        i++;
+      }
       continue;
     }
 
@@ -254,6 +279,9 @@ export function parseDiff(raw: string): ParsedDiff {
         deletions: 0,
         isBinary: false,
       };
+      if (maxFilePatchLength !== undefined && sectionExceeds(lines, i, maxFilePatchLength)) {
+        currentFile.trimmed = true;
+      }
       currentHunk = null;
       i++;
       continue;
@@ -373,7 +401,9 @@ export function parseDiff(raw: string): ParsedDiff {
         context: hunkMatch[5]?.trim() || undefined,
         lines: [],
       };
-      currentFile.hunks.push(currentHunk);
+      if (!currentFile.trimmed) {
+        currentFile.hunks.push(currentHunk);
+      }
       oldLineNum = currentHunk.oldStart;
       newLineNum = currentHunk.newStart;
       oldRemaining = currentHunk.oldCount;

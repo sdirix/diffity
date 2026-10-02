@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { DiffFile, DiffLine } from '@diffity/parser';
-import { carryCurrent, diffFindLines, firstMatchFrom, searchLines, stepIndex, type FindLine } from '../src/lib/find';
+import { carryCurrent, diffFindLines, fetchWindow, firstMatchFrom, searchLines, stepIndex, type FindLine } from '../src/lib/find';
 
 function line(type: DiffLine['type'], content: string, oldLineNumber: number | null, newLineNumber: number | null): DiffLine {
   return { type, content, oldLineNumber, newLineNumber };
@@ -112,5 +112,15 @@ describe('position helpers', () => {
     expect(stepIndex(0, 5, -1)).toBe(4);
     expect(stepIndex(2, 5, 1)).toBe(3);
     expect(stepIndex(0, 0, 1)).toBe(-1);
+  });
+});
+
+describe('fetchWindow', () => {
+  it('fetches the first files that are not settled, up to the limit', () => {
+    expect(fetchWindow([false, false, false, false], 2)).toEqual([true, true, false, false]);
+  });
+
+  it('moves on as files settle', () => {
+    expect(fetchWindow([true, false, true, false, false], 2)).toEqual([true, true, true, true, false]);
   });
 });

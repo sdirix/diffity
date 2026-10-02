@@ -1,10 +1,11 @@
 import { lstatSync, unlinkSync } from 'node:fs';
+import { loadDiffIgnore, type DiffIgnore, type DiffOptions } from './diffignore.js';
 import { InputError } from './errors.js';
-import { git, gitBuffer, gitNul, gitTry } from './exec.js';
+import { batchSpec, git, gitBuffer, gitNul, gitTry } from './exec.js';
 import { assertRepoPath, repoEntryPath } from './paths.js';
 import { getEmptyTree, getHeadHash, getHeadOrEmptyTree, getMergeBase, verifyCommit } from './refs.js';
 import { countLines, isBinary } from './text.js';
-import { getUntrackedDiff } from './untracked.js';
+import { getUntrackedDiff, quoteName } from './untracked.js';
 
 /**
  * Flags that neutralize user git config which would otherwise alter the diff
@@ -55,28 +56,156 @@ export function resolveDiffArgs(ref: string): RefDiffArgs {
   }
 }
 
-export function resolveRef(ref: string, extraArgs: string[] = []): string {
-  const resolved = resolveDiffArgs(ref);
-
-  let raw = getDiff([...resolved.args, ...extraArgs]);
-  if (resolved.includeUntracked) {
-    const untrackedFiles = getUntrackedFiles();
-    if (untrackedFiles.length > 0) {
-      raw += '\n' + getUntrackedDiff(untrackedFiles);
-    }
-  }
-  return raw;
+export interface FilteredDiff {
+  patch: string;
+  /** Changed files `.diffityignore` hides, left out of `patch` unless shown. */
+  hiddenFiles: string[];
 }
 
-export function getDiffFiles(ref: string): string[] {
-  const resolved = resolveDiffArgs(ref);
+/** Above this many bytes of exclusion pathspecs, hidden files are cut from the patch instead. */
+const MAX_PATHSPEC_BYTES = 256 * 1024;
 
-  const tracked = gitNul(['diff', ...DIFF_FORMAT_ARGS, '--name-only', '-z', ...resolved.args]);
-  if (resolved.includeUntracked) {
-    const untracked = getUntrackedFiles();
-    return [...new Set([...tracked, ...untracked])];
+interface ChangedFile {
+  path: string;
+  /** The source of a rename. */
+  renamedFrom: string | null;
+}
+
+/** `git diff --name-status -z` records, each a status followed by one path or by two for a rename or copy. */
+function parseNameStatus(fields: string[]): ChangedFile[] {
+  const files: ChangedFile[] = [];
+  for (let i = 0; i < fields.length; i++) {
+    const status = fields[i][0];
+    if (status === 'R' || status === 'C') {
+      files.push({ path: fields[i + 2], renamedFrom: status === 'R' ? fields[i + 1] : null });
+      i += 2;
+    } else {
+      files.push({ path: fields[i + 1], renamedFrom: null });
+      i += 1;
+    }
   }
-  return tracked;
+  return files;
+}
+
+function sectionHeader(file: ChangedFile): string {
+  return `diff --git ${quoteName('a/', file.renamedFrom ?? file.path)} ${quoteName('b/', file.path)}`;
+}
+
+/** `patch` without the file sections that start with one of `headers`. */
+export function dropSections(patch: string, headers: Set<string>): string {
+  return patch
+    .split(/^(?=diff --(?:git|cc|combined) )/m)
+    .filter((section) => {
+      const eol = section.indexOf('\n');
+      return !headers.has(eol === -1 ? section : section.slice(0, eol));
+    })
+    .join('');
+}
+
+interface HiddenPlan {
+  /** Exclusion pathspecs for the hidden tracked files, led by `--`. */
+  pathspec: string[];
+  /** Headers of the sections to drop, set when the pathspecs would make the command line too long. */
+  dropHeaders: Set<string> | null;
+  untracked: string[];
+  hidden: string[];
+}
+
+/**
+ * How `git diff <args>` leaves out the files `rules` hide: lists the changed
+ * files and excludes the hidden ones by pathspec, so git never builds their
+ * patches. A hidden folder is excluded whole unless a shown rename starts in
+ * it. A rename into a hidden folder from a shown path leaves its source in
+ * the diff as deleted. Without `exclude`, the hidden files are only listed.
+ */
+function planHidden(args: string[], untracked: string[], rules: DiffIgnore, exclude: boolean): HiddenPlan {
+  if (!rules.hash) {
+    return { pathspec: [], dropHeaders: null, untracked, hidden: [] };
+  }
+  const changed = parseNameStatus(gitNul(['diff', ...DIFF_FORMAT_ARGS, '--name-status', '-z', ...args]));
+  const hiddenTracked = changed.filter((file) => rules.isIgnored(file.path));
+  const shownUntracked = untracked.filter((file) => !rules.isIgnored(file));
+  const hidden = [...hiddenTracked.map((file) => file.path), ...untracked.filter((file) => rules.isIgnored(file))].sort();
+  if (!exclude) {
+    return { pathspec: [], dropHeaders: null, untracked, hidden };
+  }
+  const wholeFolders = !changed.some((file) => file.renamedFrom && !rules.isIgnored(file.path) && rules.isIgnored(file.renamedFrom));
+
+  const excluded = new Set<string>();
+  for (const file of hiddenTracked) {
+    excluded.add(wholeFolders ? rules.exclusionFor(file.path) : file.path);
+    if (file.renamedFrom && rules.isIgnored(file.renamedFrom)) {
+      excluded.add(file.renamedFrom);
+    }
+  }
+  let bytes = 0;
+  for (const path of excluded) {
+    bytes += path.length + 24;
+  }
+  if (bytes > MAX_PATHSPEC_BYTES) {
+    return { pathspec: [], dropHeaders: new Set(hiddenTracked.map(sectionHeader)), untracked: shownUntracked, hidden };
+  }
+  const pathspec = excluded.size > 0 ? ['--', ...[...excluded].map((path) => `:(top,exclude,literal)${path}`)] : [];
+  return { pathspec, dropHeaders: null, untracked: shownUntracked, hidden };
+}
+
+/**
+ * `git diff <args>`, followed by the untracked files with
+ * `includeUntracked`, without the files `.diffityignore` hides unless
+ * `showHidden`.
+ */
+export function getFilteredDiff(args: string[], includeUntracked: boolean, options: DiffOptions = {}): FilteredDiff {
+  const plan = planHidden(args, includeUntracked ? getUntrackedFiles() : [], loadDiffIgnore(), !options.showHidden);
+  let patch = getDiff([...args, ...plan.pathspec]);
+  if (plan.dropHeaders) {
+    patch = dropSections(patch, plan.dropHeaders);
+  }
+  if (plan.untracked.length > 0) {
+    patch += '\n' + getUntrackedDiff(plan.untracked);
+  }
+  return { patch, hiddenFiles: plan.hidden };
+}
+
+export function getRefDiff(ref: string, extraArgs: string[] = [], options: DiffOptions = {}): FilteredDiff {
+  const resolved = resolveDiffArgs(ref);
+  return getFilteredDiff([...resolved.args, ...extraArgs], resolved.includeUntracked, options);
+}
+
+/**
+ * The section of `getRefDiff` for one file, `''` when the file is not part
+ * of it or `.diffityignore` hides it. `oldPath` is the source of a rename.
+ */
+export function getRefFilePatch(ref: string, path: string, oldPath: string | null, extraArgs: string[] = [], options: DiffOptions = {}): string {
+  assertRepoPath(path);
+  if (oldPath) {
+    assertRepoPath(oldPath);
+  }
+  if (loadDiffIgnore(options).isIgnored(path)) {
+    return '';
+  }
+  const resolved = resolveDiffArgs(ref);
+  const paths = oldPath && oldPath !== path ? [oldPath, path] : [path];
+  const patch = getDiff([...resolved.args, ...extraArgs, '--', ...paths.map((p) => `:(top,literal)${p}`)]);
+  if (patch || !resolved.includeUntracked) {
+    return patch;
+  }
+  const untracked = gitNul(['ls-files', '-z', '--others', '--exclude-standard', '--', `:(top,literal)${path}`]);
+  return untracked.includes(path) ? getUntrackedDiff([path]) : '';
+}
+
+export function resolveRef(ref: string, extraArgs: string[] = [], options: DiffOptions = {}): string {
+  return getRefDiff(ref, extraArgs, options).patch;
+}
+
+/** The files the diff of `ref` shows, the source of a rename into a hidden folder as deleted. */
+export function getDiffFiles(ref: string, options: DiffOptions = {}): string[] {
+  const resolved = resolveDiffArgs(ref);
+  const rules = loadDiffIgnore(options);
+
+  const tracked = parseNameStatus(gitNul(['diff', ...DIFF_FORMAT_ARGS, '--name-status', '-z', ...resolved.args]))
+    .map((file) => (file.renamedFrom && rules.isIgnored(file.path) ? file.renamedFrom : file.path));
+  const files = new Set(resolved.includeUntracked ? [...tracked, ...getUntrackedFiles()] : tracked);
+  return [...files].filter((file) => !rules.isIgnored(file));
 }
 
 /**
@@ -302,12 +431,12 @@ export function getFileLineCounts(paths: string[], base: BaseSource): (number | 
     return counts;
   }
   const rev = base.type === 'index' ? ':0' : base.ref;
-  // The batch input is line based, so a name with a newline cannot be requested.
-  const requested = paths.flatMap((path, i) => (path.includes('\n') ? [] : [i]));
+  const specs = paths.map((path) => batchSpec(`${rev}:${path}`));
+  const requested = paths.flatMap((_, i) => (specs[i] === null ? [] : [i]));
   if (requested.length === 0) {
     return counts;
   }
-  const input = requested.map((i) => `${rev}:${paths[i]}\n`).join('');
+  const input = requested.map((i) => `${specs[i]}\n`).join('');
   const out = gitBuffer(['cat-file', '--batch', '--buffer'], { input });
   parseBatchLineCounts(out, requested.length).forEach((count, n) => {
     counts[requested[n]] = count;

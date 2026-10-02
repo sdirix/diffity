@@ -38,6 +38,7 @@ export const SHORTCUT_SECTIONS: ShortcutSection[] = [
     shortcuts: [
       { id: 'file-next', label: 'Next file', keys: ['j'] },
       { id: 'file-prev', label: 'Previous file', keys: ['k'] },
+      { id: 'file-next-unviewed', label: 'Next unviewed file', keys: ['Shift+j'] },
       { id: 'hunk-next', label: 'Next changed hunk', keys: ['n'] },
       { id: 'hunk-prev', label: 'Previous changed hunk', keys: ['p'] },
       { id: 'ref-menu', label: 'Choose what to review', keys: ['w'] },
@@ -50,7 +51,9 @@ export const SHORTCUT_SECTIONS: ShortcutSection[] = [
       { id: 'view-split', label: 'Split view', keys: ['s'] },
       { label: 'Collapse/expand file', keys: ['x'] },
       { id: 'collapse-all', label: 'Collapse/expand all files', keys: ['Shift+x'] },
-      { label: 'Toggle file as viewed', keys: ['r'] },
+      { id: 'toggle-viewed', label: 'Toggle file as viewed', keys: ['r'] },
+      { id: 'mark-all-viewed', label: 'Mark all files as viewed', keys: ['Shift+r'] },
+      { id: 'comments-panel', label: 'Toggle comments panel', keys: ['c'] },
     ],
   },
   {
@@ -68,6 +71,7 @@ export const SHORTCUT_SECTIONS: ShortcutSection[] = [
       { id: 'filter-files', label: 'Focus search', keys: ['/'] },
       { label: 'Actions for the focused file or folder', keys: ['Shift+F10', 'Menu'] },
       { id: 'shortcuts', label: 'Show shortcuts', keys: ['?'] },
+      { id: 'settings', label: 'Settings', keys: [chord(',')] },
       { label: 'Close modal / clear', keys: ['Esc'] },
     ],
   },
