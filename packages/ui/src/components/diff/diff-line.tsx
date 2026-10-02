@@ -2,6 +2,7 @@ import type { DiffLine as DiffLineType } from '@diffity/parser';
 import { cn } from '../../lib/cn';
 import { getLineBg } from '../../lib/diff-utils';
 import { renderContent } from '../../lib/render-content';
+import { diffLineKey } from '../../lib/find';
 import type { SyntaxToken } from '../../lib/syntax-token';
 import { CommentLineNumber } from '../comments/comment-line-number';
 import type { CommentSide } from '../comments/types';
@@ -32,9 +33,9 @@ function getPrefix(type: string): string {
 function getPrefixColor(type: string): string {
   switch (type) {
     case 'add':
-      return 'text-added';
+      return 'text-diff-added';
     case 'delete':
-      return 'text-deleted';
+      return 'text-diff-deleted';
     default:
       return 'text-text-muted';
   }
@@ -71,7 +72,7 @@ export function DiffLine(props: DiffLineProps) {
         {getPrefix(line.type)}
       </td>
       <td className={cn('px-3 whitespace-pre-wrap break-all', isSelected && 'bg-diff-comment-bg')}>
-        <span className="inline">{renderContent(line, syntaxTokens)}</span>
+        <span className="inline" data-find-line={diffLineKey(line)}>{renderContent(line, syntaxTokens)}</span>
       </td>
     </tr>
   );

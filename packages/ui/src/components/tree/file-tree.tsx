@@ -7,8 +7,16 @@ import {
   filterTree,
   filterTreeToPaths,
   collectAllDirPaths,
+  allDirsExpanded,
+  visibleRows,
+  rowPath,
+  type FileNode,
+  type TreeNode,
 } from '../../lib/file-tree';
-import { FileTreeItem } from './file-tree-item';
+import { getFilePath } from '../../lib/diff-utils';
+import { FileTreeRow, FlatFileRow } from './file-tree-row';
+import { VirtualRows } from './virtual-rows';
+import type { MenuPosition } from '../ui/context-menu';
 
 interface FileTreeProps {
   files: DiffFile[];
@@ -17,8 +25,12 @@ interface FileTreeProps {
   reviewedFiles: Set<string>;
   commentCountsByFile: Map<string, number>;
   commentedFilesOnly: boolean;
+  /** Lists the files by path in diff order instead of as a tree. */
+  flat?: boolean;
   onFileClick: (path: string) => void;
   onExpandedStateChange?: (allExpanded: boolean) => void;
+  onMenu?: (node: TreeNode, at: MenuPosition) => void;
+  menuPath?: string | null;
 }
 
 export interface FileTreeHandle {
@@ -34,8 +46,11 @@ export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileT
     reviewedFiles,
     commentCountsByFile,
     commentedFilesOnly,
+    flat = false,
     onFileClick,
     onExpandedStateChange,
+    onMenu,
+    menuPath,
   } = props;
 
   const tree = useMemo(() => {
@@ -87,7 +102,7 @@ export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileT
     if (!onExpandedStateChange || allDirPaths.length === 0) {
       return;
     }
-    onExpandedStateChange(expandedDirs.size >= allDirPaths.length);
+    onExpandedStateChange(allDirsExpanded(allDirPaths, expandedDirs));
   }, [expandedDirs, allDirPaths, onExpandedStateChange]);
 
   const handleToggleDir = useCallback((path: string) => {
@@ -102,31 +117,77 @@ export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileT
     });
   }, []);
 
-  return (
-    <div className="flex-1 overflow-y-auto py-1">
-      {displayTree.length === 0 ? (
-        <div className="px-4 py-6 text-center text-xs text-text-muted">
-          {search
-            ? 'No matching files'
-            : commentedFilesOnly
-              ? 'No files with open comments'
-              : 'No files'}
-        </div>
-      ) : (
-        displayTree.map(node => (
-          <FileTreeItem
-            key={node.path}
+  const rows = useMemo(
+    () => (flat ? [] : visibleRows(displayTree, effectiveExpandedDirs)),
+    [flat, displayTree, effectiveExpandedDirs],
+  );
+  const flatNodes = useMemo<FileNode[]>(() => {
+    if (!flat) {
+      return [];
+    }
+    const lower = search.toLowerCase();
+    return files
+      .map((file): FileNode => {
+        const path = getFilePath(file);
+        return { type: 'file', name: path.slice(path.lastIndexOf('/') + 1), path, file };
+      })
+      .filter((node) => (!commentedFilesOnly || commentedPaths.has(node.path)) && (!lower || node.path.toLowerCase().includes(lower)));
+  }, [flat, files, search, commentedFilesOnly, commentedPaths]);
+
+  if (flat ? flatNodes.length === 0 : displayTree.length === 0) {
+    return (
+      <div className="flex-1 px-4 py-6 text-center text-xs text-text-muted">
+        {search
+          ? 'No matching files'
+          : commentedFilesOnly
+            ? 'No files with open comments'
+            : 'No files'}
+      </div>
+    );
+  }
+
+  if (flat) {
+    return (
+      <VirtualRows
+        items={flatNodes}
+        itemPath={(node) => node.path}
+        activePath={activeFile}
+        className="flex-1 overflow-y-auto"
+        renderRow={(node) => (
+          <FlatFileRow
             node={node}
-            depth={0}
-            activeFile={activeFile}
-            reviewedFiles={reviewedFiles}
-            commentCountsByFile={commentCountsByFile}
-            expandedDirs={effectiveExpandedDirs}
-            onToggleDir={handleToggleDir}
+            active={activeFile === node.path}
+            reviewed={reviewedFiles.has(node.path)}
+            threadCount={commentCountsByFile.get(node.path) ?? 0}
+            menuOpen={menuPath === node.path}
             onFileClick={onFileClick}
+            onMenu={onMenu}
           />
-        ))
+        )}
+      />
+    );
+  }
+
+  return (
+    <VirtualRows
+      items={rows}
+      itemPath={rowPath}
+      activePath={activeFile}
+      className="flex-1 overflow-y-auto"
+      renderRow={({ node, depth }) => (
+        <FileTreeRow
+          node={node}
+          depth={depth}
+          expanded={effectiveExpandedDirs.has(node.path)}
+          active={activeFile === node.path}
+          reviewed={reviewedFiles.has(node.path)}
+          threadCount={commentCountsByFile.get(node.path) ?? 0}
+          menuOpen={menuPath === node.path}
+          onToggleDir={handleToggleDir}
+          onFileClick={onFileClick}
+          onMenu={onMenu}
+        />
       )}
-    </div>
+    />
   );
 });

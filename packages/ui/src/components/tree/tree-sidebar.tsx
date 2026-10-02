@@ -6,8 +6,18 @@ import {
   filterTree,
   filterTreeToPaths,
   collectAllDirPaths,
+  allDirsExpanded,
+  knownExpandedDirs,
+  ancestorDirs,
+  visibleRows,
+  rowPath,
 } from '../../lib/file-tree';
-import { FileTreeItem } from './file-tree-item';
+import { FileTreeRow } from './file-tree-row';
+import { VirtualRows } from './virtual-rows';
+import { PathMenu, type PathMenuTarget } from './path-menu';
+import { fetchTreeFileContent, type WorkingTreeStatus } from '../../lib/api';
+import { readJsonPreference, writeJsonPreference } from '../../lib/preferences';
+import { restoredScrollTop, useRestoredScroll, useViewState } from '../../lib/view-state';
 import { SidebarIcon } from '../icons/sidebar-icon';
 import { SearchIcon } from '../icons/search-icon';
 import { XIcon } from '../icons/x-icon';
@@ -19,9 +29,23 @@ interface TreeSidebarProps {
   paths: string[];
   activeFile: string | null;
   commentCountsByFile: Map<string, number>;
+  statuses?: Record<string, WorkingTreeStatus>;
+  repoRoot: string;
+  editor: boolean;
   onFileClick: (path: string) => void;
   onDirClick: (path: string) => void;
+  onCommentOnPath: (path: string, type: 'file' | 'dir') => void;
   focusFileTick?: number;
+  /** Keeps expanded folders and the scroll position under this key across reloads. */
+  stateKey?: string;
+}
+
+function readExpandedDirs(preference: string | null): Set<string> | null {
+  const value = preference ? readJsonPreference(preference) : null;
+  if (!Array.isArray(value)) {
+    return null;
+  }
+  return new Set(value.filter((path): path is string => typeof path === 'string'));
 }
 
 export const TreeSidebar = forwardRef<HTMLInputElement, TreeSidebarProps>(function TreeSidebar(props, ref) {
@@ -29,21 +53,40 @@ export const TreeSidebar = forwardRef<HTMLInputElement, TreeSidebarProps>(functi
     paths,
     activeFile,
     commentCountsByFile,
+    statuses,
+    repoRoot,
+    editor,
     onFileClick,
     onDirClick,
+    onCommentOnPath,
     focusFileTick,
+    stateKey,
   } = props;
 
-  const [search, setSearch] = useState('');
+  const memoryKey = stateKey ? 'tree' : 'tour';
+  const expandedPreference = stateKey ? `tree-expanded:${stateKey}` : null;
+  const [search, setSearch] = useViewState(`${memoryKey}:filter`, '');
   const [collapsed, setCollapsed] = useState(false);
-  const [expandedDirs, setExpandedDirs] = useState<Set<string> | null>(null);
-  const [commentedFilesOnly, setCommentedFilesOnly] = useState(false);
+  const [expandedDirs, setExpandedDirs] = useState(() => readExpandedDirs(expandedPreference));
+  const [commentedFilesOnly, setCommentedFilesOnly] = useViewState(`${memoryKey}:commented-only`, false);
+  const [menu, setMenu] = useState<PathMenuTarget | null>(null);
+  // The offset is kept for the open file, so a link to another one shows that file instead.
+  const scrollKey = `${memoryKey}:sidebar-scroll`;
+  const scrollPreference = stateKey && `tree-sidebar-scroll:${stateKey}`;
+  const listRef = useRestoredScroll(scrollKey, activeFile ?? '', scrollPreference);
 
   const tree = useMemo(() => {
     return sortTree(collapseSingleChildDirs(buildFileTreeFromPaths(paths)));
   }, [paths]);
 
   const allDirPaths = useMemo(() => collectAllDirPaths(tree), [tree]);
+
+  // Revealing a file expands every folder above it, also the ones merged into a single row, which are no folder of the tree.
+  useEffect(() => {
+    if (expandedPreference && expandedDirs && paths.length > 0) {
+      writeJsonPreference(expandedPreference, knownExpandedDirs(expandedDirs, allDirPaths));
+    }
+  }, [expandedPreference, expandedDirs, paths, allDirPaths]);
 
   const commentedPaths = useMemo(
     () => new Set(commentCountsByFile.keys()),
@@ -106,7 +149,7 @@ export const TreeSidebar = forwardRef<HTMLInputElement, TreeSidebarProps>(functi
     return result;
   }, [tree, search, effectiveCommentedOnly, commentedPaths]);
 
-  const allExpanded = effectiveExpanded.size >= allDirPaths.length;
+  const allExpanded = allDirsExpanded(allDirPaths, effectiveExpanded);
 
   // Expand only on click (no collapse); chevron handles collapse
   const handleExpandDir = useCallback((path: string) => {
@@ -126,16 +169,18 @@ export const TreeSidebar = forwardRef<HTMLInputElement, TreeSidebarProps>(functi
     });
   }, []);
 
-  const handleExpandOnly = useCallback((path: string) => {
+  const handleCollapseOthers = useCallback((path: string, type: 'file' | 'dir') => {
     const parts = path.split('/');
+    const depth = type === 'dir' ? parts.length : parts.length - 1;
     const next = new Set<string>();
-    for (let i = 1; i <= parts.length; i++) {
+    for (let i = 1; i <= depth; i++) {
       next.add(parts.slice(0, i).join('/'));
     }
     setExpandedDirs(next);
   }, []);
 
-  const emptyReviewedFiles = useMemo(() => new Set<string>(), []);
+  const rows = useMemo(() => visibleRows(displayTree, effectiveExpanded), [displayTree, effectiveExpanded]);
+  const changedDirs = useMemo(() => ancestorDirs(Object.keys(statuses ?? {})), [statuses]);
 
   if (collapsed) {
     return (
@@ -231,33 +276,51 @@ export const TreeSidebar = forwardRef<HTMLInputElement, TreeSidebarProps>(functi
           </button>
         )}
       </div>
-      <div className="flex-1 overflow-y-auto py-1">
-        {displayTree.length === 0 ? (
-          <div className="px-4 py-6 text-center text-xs text-text-muted">
-            {search
-              ? 'No matching files'
-              : effectiveCommentedOnly
-                ? 'No files with open comments'
-                : 'No files'}
-          </div>
-        ) : (
-          displayTree.map(node => (
-            <FileTreeItem
-              key={node.path}
+      {displayTree.length === 0 ? (
+        <div className="flex-1 px-4 py-6 text-center text-xs text-text-muted">
+          {search
+            ? 'No matching files'
+            : effectiveCommentedOnly
+              ? 'No files with open comments'
+              : 'No files'}
+        </div>
+      ) : (
+        <VirtualRows
+          items={rows}
+          itemPath={rowPath}
+          activePath={activeFile}
+          revealOnMount={restoredScrollTop(scrollKey, activeFile ?? '', scrollPreference) === 0}
+          scrollRef={listRef}
+          className="flex-1 overflow-y-auto"
+          renderRow={({ node, depth }) => (
+            <FileTreeRow
               node={node}
-              depth={0}
-              activeFile={activeFile}
-              reviewedFiles={emptyReviewedFiles}
-              commentCountsByFile={commentCountsByFile}
-              expandedDirs={effectiveExpanded}
+              depth={depth}
+              expanded={effectiveExpanded.has(node.path)}
+              active={activeFile === node.path}
+              threadCount={commentCountsByFile.get(node.path) ?? 0}
+              status={statuses?.[node.path]}
+              changed={changedDirs.has(node.path)}
+              menuOpen={menu?.path === node.path}
               onToggleDir={handleExpandDir}
               onCollapseDir={handleCollapseDir}
-              onExpandOnly={handleExpandOnly}
               onFileClick={onFileClick}
+              onMenu={(item, at) => setMenu({ path: item.path, type: item.type, at })}
             />
-          ))
-        )}
-      </div>
+          )}
+        />
+      )}
+      {menu && (
+        <PathMenu
+          target={menu}
+          root={repoRoot}
+          editor={editor}
+          loadContents={fetchTreeFileContent}
+          onComment={onCommentOnPath}
+          onCollapseOthers={handleCollapseOthers}
+          onClose={() => setMenu(null)}
+        />
+      )}
     </aside>
   );
 });

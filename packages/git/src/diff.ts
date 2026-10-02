@@ -79,24 +79,6 @@ export function getDiffFiles(ref: string): string[] {
   return tracked;
 }
 
-export function getDiffStat(args: string[] = []): string {
-  try {
-    return git(['diff', ...DIFF_FORMAT_ARGS, '--stat', ...args]);
-  } catch {
-    return '';
-  }
-}
-
-export function getDiffStatForRef(ref: string): string {
-  const resolved = resolveDiffArgs(ref);
-
-  let stat = getDiffStat(resolved.args);
-  if (resolved.includeUntracked) {
-    stat += '\n' + getUntrackedFiles().join('\n');
-  }
-  return stat;
-}
-
 /**
  * Discards working tree changes to `filePath`. Restores it from HEAD, or
  * removes it from the index and the working tree when HEAD does not have it.

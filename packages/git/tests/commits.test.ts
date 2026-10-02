@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { getRecentCommits } from '../src/commits.js';
+import { getCommit, getRecentCommits } from '../src/commits.js';
 import { createRepo, type TempRepo } from './helpers.js';
 
 const SUBJECTS = ['first | with pipe', 'second [bracket( $(touch pwned)', 'third'];
@@ -31,6 +31,13 @@ describe('getRecentCommits', () => {
     expect(commits[2].relativeDate).toMatch(/ago$/);
   });
 
+  it('reads the author', () => {
+    const [commit] = getRecentCommits({ count: 1 });
+    expect(commit.authorName).toBe(repo.git('log', '-1', '--format=%an').trim());
+    expect(commit.authorEmail).toBe(repo.git('log', '-1', '--format=%ae').trim());
+    expect(commit.authorEmail).toContain('@');
+  });
+
   it('pages with count and skip', () => {
     expect(getRecentCommits({ count: 1, skip: 1 }).map((c) => c.message)).toEqual([SUBJECTS[1]]);
     expect(getRecentCommits({ count: NaN }).length).toBe(3);
@@ -40,5 +47,20 @@ describe('getRecentCommits', () => {
     expect(getRecentCommits({ count: 10, search: 'WITH PIPE' }).map((c) => c.message)).toEqual([SUBJECTS[0]]);
     expect(getRecentCommits({ count: 10, search: '[bracket(' }).map((c) => c.message)).toEqual([SUBJECTS[1]]);
     expect(getRecentCommits({ count: 10, search: 'nothing' })).toEqual([]);
+  });
+});
+
+describe('getCommit', () => {
+  it('reads the commit a rev names', () => {
+    const commit = getCommit('HEAD~1');
+    expect(commit?.hash).toBe(repo.git('rev-parse', 'HEAD~1').trim());
+    expect(commit?.message).toBe(SUBJECTS[1]);
+    expect(getCommit(commit!.shortHash)?.hash).toBe(commit!.hash);
+  });
+
+  it('is null for anything else', () => {
+    expect(getCommit('nope')).toBeNull();
+    expect(getCommit('HEAD~9')).toBeNull();
+    expect(getCommit('--all')).toBeNull();
   });
 });

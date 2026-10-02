@@ -1,45 +1,18 @@
-import { useEffect, useRef } from 'react';
+import { useLayoutEffect, useRef } from 'react';
 import { XIcon } from '../icons/x-icon';
+import { Kbd } from '../ui/kbd';
+import { SHORTCUT_SECTIONS } from '../../lib/shortcuts';
 
 interface ShortcutModalProps {
   onClose: () => void;
 }
 
-const shortcuts = [
-  {
-    category: 'Navigation',
-    items: [
-      { key: 'j', description: 'Next file' },
-      { key: 'k', description: 'Previous file' },
-      { key: 'n', description: 'Next changed hunk' },
-      { key: 'p', description: 'Previous changed hunk' },
-    ],
-  },
-  {
-    category: 'View',
-    items: [
-      { key: 'u', description: 'Unified view' },
-      { key: 's', description: 'Split view' },
-      { key: 'x', description: 'Collapse/expand file' },
-      { key: 'Shift+x', description: 'Collapse/expand all files' },
-      { key: 'r', description: 'Toggle file as viewed' },
-    ],
-  },
-  {
-    category: 'Other',
-    items: [
-      { key: '/', description: 'Focus search' },
-      { key: '?', description: 'Show shortcuts' },
-      { key: 'Esc', description: 'Close modal / clear' },
-    ],
-  },
-];
-
 export function ShortcutModal(props: ShortcutModalProps) {
   const { onClose } = props;
   const dialogRef = useRef<HTMLDialogElement>(null);
 
-  useEffect(() => {
+  // A layout effect closes the dialog before it leaves the document, so focus goes back where it was.
+  useLayoutEffect(() => {
     const dialog = dialogRef.current;
     if (!dialog) {
       return;
@@ -70,18 +43,20 @@ export function ShortcutModal(props: ShortcutModalProps) {
         </button>
       </div>
       <div className="px-5 py-4">
-        {shortcuts.map(group => (
-          <div key={group.category} className="mb-5 last:mb-0">
+        {SHORTCUT_SECTIONS.map(section => (
+          <div key={section.title} className="mb-5 last:mb-0">
             <h3 className="text-[10px] font-semibold text-text-muted mb-2.5 uppercase tracking-widest">
-              {group.category}
+              {section.title}
             </h3>
             <div className="flex flex-col gap-1.5">
-              {group.items.map(item => (
-                <div key={item.key} className="flex items-center justify-between py-0.5">
-                  <span className="text-xs text-text-secondary">{item.description}</span>
-                  <kbd className="inline-flex items-center justify-center min-w-6 h-5 px-1.5 bg-bg-secondary border border-border rounded font-mono text-[11px] text-text-muted shadow-[inset_0_-1px_0_var(--color-border)]">
-                    {item.key}
-                  </kbd>
+              {section.shortcuts.map(item => (
+                <div key={item.label} className="flex items-center justify-between py-0.5">
+                  <span className="text-xs text-text-secondary">{item.label}</span>
+                  <span className="flex items-center gap-1">
+                    {item.keys.map(key => (
+                      <Kbd key={key}>{key}</Kbd>
+                    ))}
+                  </span>
                 </div>
               ))}
             </div>

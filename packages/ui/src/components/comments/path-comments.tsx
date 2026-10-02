@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import type { CommentThread as CommentThreadType } from './types';
 import { isThreadResolved, DEFAULT_AUTHOR } from './types';
 import type { CommentActions } from '../../hooks/use-comment-actions';
@@ -14,12 +14,24 @@ interface PathCommentsProps {
   label: string;
   children?: React.ReactNode;
   focusedThreadId?: string | null;
+  /** Opens the form whenever it changes. */
+  composeRequest?: number;
 }
 
 export function PathComments(props: PathCommentsProps) {
-  const { pathKey, threads, commentActions, label, children, focusedThreadId } = props;
+  const { pathKey, threads, commentActions, label, children, focusedThreadId, composeRequest } = props;
   const [isExpanded, setIsExpanded] = useState(false);
   const [showForm, setShowForm] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!composeRequest) {
+      return;
+    }
+    setIsExpanded(true);
+    setShowForm(true);
+    containerRef.current?.scrollIntoView({ block: 'nearest' });
+  }, [composeRequest]);
 
   useEffect(() => {
     if (!focusedThreadId) {
@@ -49,7 +61,7 @@ export function PathComments(props: PathCommentsProps) {
   };
 
   return (
-    <div className="mb-2.5">
+    <div ref={containerRef} className="mb-2.5">
       <div className="flex items-center gap-1 text-sm">
         {children}
         <div className="flex-1" />

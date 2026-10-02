@@ -62,15 +62,8 @@ export interface Commit {
   shortHash: string;
   message: string;
   relativeDate: string;
-}
-
-export interface OverviewFile {
-  path: string;
-  status: 'staged' | 'modified' | 'added';
-}
-
-export interface Overview {
-  files: OverviewFile[];
+  authorName: string;
+  authorEmail: string;
 }
 
 export interface CommitsPage {
@@ -78,7 +71,23 @@ export interface CommitsPage {
   hasMore: boolean;
 }
 
-export function fetchDiff(hideWhitespace: boolean, ref?: string): Promise<ParsedDiff> {
+export interface RepoStatus {
+  branch: string;
+  base: string | null;
+  work: number;
+  staged: number;
+  unstaged: number;
+}
+
+export interface RefLookup {
+  ref: string;
+  commit: Commit | null;
+}
+
+/** A diff with the fingerprint of the files it was read from. */
+export type DiffResponse = ParsedDiff & { fingerprint: string };
+
+export function fetchDiff(hideWhitespace: boolean, ref?: string): Promise<DiffResponse> {
   return apiFetch(buildUrl('/api/diff', {
     whitespace: hideWhitespace ? 'hide' : undefined,
     ref,
@@ -102,12 +111,17 @@ export function openInEditor(filePath: string, line?: number): Promise<{ ok: boo
   });
 }
 
-export function fetchOverview(): Promise<Overview> {
-  return apiFetch('/api/overview');
-}
-
 export function fetchCommits(skip = 0, count = 10, search?: string): Promise<CommitsPage> {
   return apiFetch(buildUrl('/api/commits', { skip: String(skip), count: String(count), search }));
+}
+
+export function fetchStatus(): Promise<RepoStatus> {
+  return apiFetch('/api/status');
+}
+
+/** Resolves `ref` like the diff does, failing with the server's message when it does not. */
+export function fetchRef(ref: string): Promise<RefLookup> {
+  return apiFetch(buildUrl('/api/ref', { ref }));
 }
 
 export async function fetchSession(): Promise<{ id: string; ref: string; headHash: string } | null> {
@@ -288,7 +302,7 @@ export interface TreeEntryResponse {
   name: string;
 }
 
-export function fetchTreePaths(): Promise<{ paths: string[] }> {
+export function fetchTreePaths(): Promise<{ paths: string[]; fingerprint: string }> {
   return apiFetch('/api/tree');
 }
 
@@ -303,6 +317,14 @@ export function fetchTreeInfo(): Promise<RepoInfo> {
 export async function fetchTreeFingerprint(): Promise<string> {
   const json = await apiFetch<{ fingerprint: string }>('/api/tree/fingerprint');
   return json.fingerprint;
+}
+
+export type WorkingTreeStatus = 'modified' | 'added' | 'deleted' | 'renamed' | 'untracked' | 'conflicted';
+
+/** Changed paths of the working tree and index, staged and unstaged combined. */
+export async function fetchTreeStatus(): Promise<Record<string, WorkingTreeStatus>> {
+  const json = await apiFetch<{ files: Record<string, WorkingTreeStatus> }>('/api/tree/status');
+  return json.files;
 }
 
 export async function fetchTreeFileContent(filePath: string): Promise<string[]> {

@@ -1,10 +1,18 @@
 import { queryOptions } from '@tanstack/react-query';
-import { fetchTreePaths, fetchTreeEntries, fetchTreeInfo, fetchTreeFileContent, fetchTour } from '../lib/api';
+import { fetchTreePaths, fetchTreeEntries, fetchTreeInfo, fetchTreeFileContent, fetchTreeStatus, fetchTour } from '../lib/api';
 
 export function treePathsOptions() {
   return queryOptions({
     queryKey: ['tree-paths'],
     queryFn: () => fetchTreePaths(),
+    staleTime: 60_000,
+  });
+}
+
+export function treeStatusOptions() {
+  return queryOptions({
+    queryKey: ['tree-status'],
+    queryFn: () => fetchTreeStatus(),
     staleTime: 60_000,
   });
 }

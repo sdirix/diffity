@@ -24,6 +24,32 @@ export function getCurrentBranch(): string {
   return gitTry(['symbolic-ref', '--quiet', '--short', 'HEAD'])?.trim() || 'HEAD';
 }
 
+const BASE_BRANCHES = ['main', 'master', 'develop', 'trunk'];
+
+/**
+ * The branch the current one is compared against: its upstream when that is
+ * another branch, else the default branch. That is the one `origin/HEAD`
+ * names, or the first of main, master, develop and trunk that exists, the
+ * remote one first. `null` on the default branch itself or without one.
+ */
+export function getBaseBranch(): string | null {
+  const branch = getCurrentBranch();
+  const remoteHead = gitTry(['symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD'])?.trim();
+  const defaultBranch = [remoteHead, ...BASE_BRANCHES.flatMap((name) => [`origin/${name}`, name])]
+    .find((name): name is string => !!name && verifyCommit(name) !== null);
+  if (defaultBranch === branch || defaultBranch === `origin/${branch}`) {
+    return null;
+  }
+  const merge = branch === 'HEAD' ? null : gitTry(['config', '--get', `branch.${branch}.merge`])?.trim();
+  if (merge && merge !== `refs/heads/${branch}`) {
+    const upstream = gitTry(['rev-parse', '--abbrev-ref', '@{upstream}'])?.trim();
+    if (upstream && verifyCommit(upstream)) {
+      return upstream;
+    }
+  }
+  return defaultBranch ?? null;
+}
+
 export function getRepoInfo(): RepoInfo {
   return {
     name: getRepoName(),

@@ -15,6 +15,7 @@ import {
   treeInfoOptions,
   treeFileContentOptions,
   treeEntriesOptions,
+  treeStatusOptions,
   tourOptions,
 } from '../../queries/tree';
 import { useTheme } from '../../hooks/use-theme';
@@ -38,8 +39,24 @@ import { CodeIcon } from '../icons/code-icon';
 import { FileIcon } from '../icons/file-icon';
 import { SegmentedToggle } from '../ui/segmented-toggle';
 import { TourPanel } from './tour-panel';
-import { openInEditor } from '../../lib/api';
+import { openInEditorWithToast } from '../../lib/toast';
 import { PencilIcon } from '../icons/pencil-icon';
+import { ViewTabs } from '../layout/view-tabs';
+import { useRestoredScroll } from '../../lib/view-state';
+import { FileViewerSkeleton, FolderSkeleton } from '../layout/skeleton';
+import { useRevealClass } from '../ui/skeleton';
+import { shortcutHint } from '../../lib/shortcuts';
+import { usePaletteActions, usePaletteView, type PaletteAction, type PaletteView } from '../../hooks/use-palette';
+import { SearchIcon } from '../icons/search-icon';
+import { SunIcon } from '../icons/sun-icon';
+import { MoonIcon } from '../icons/moon-icon';
+import { CommentIcon } from '../icons/comment-icon';
+import { ArrowUpIcon } from '../icons/arrow-up-icon';
+import { VscodeIcon } from '../icons/vscode-icon';
+import { XIcon } from '../icons/x-icon';
+
+const NO_THREADS: CommentThread[] = [];
+const iconClass = 'w-3.5 h-3.5';
 
 interface TreePageProps {
   tourId?: string;
@@ -105,7 +122,6 @@ export function TreePage(props: TreePageProps) {
     initialTheme ?? loaderData?.theme ?? null,
   );
   const queryClient = useQueryClient();
-  const { isStale, resetStaleness } = useTreeStaleness();
 
   const [internalNav, setInternalNav] = useState<{
     path: string;
@@ -137,6 +153,7 @@ export function TreePage(props: TreePageProps) {
 
   const [focusedThreadId, setFocusedThreadId] = useState<string | null>(null);
   const [previewMode, setPreviewMode] = useState<'preview' | 'code'>('preview');
+  const [pathCommentRequest, setPathCommentRequest] = useState(0);
   const tourStepIndex = tourStepIndexProp ?? 0;
   const [tourScrollTick, setTourScrollTick] = useState(0);
   const [tourSubHighlight, setTourSubHighlight] = useState<{
@@ -170,9 +187,20 @@ export function TreePage(props: TreePageProps) {
   }, []);
 
   const { data: treeData } = useSuspenseQuery(treePathsOptions());
+  const { isStale, resetStaleness } = useTreeStaleness(treeData.fingerprint);
   const { data: info } = useSuspenseQuery(treeInfoOptions());
+  const restoreMainScroll = useRestoredScroll(
+    isTourMode ? `tour:${tourId}:scroll` : 'tree:scroll',
+    `${navType}:${navPath}`,
+    isTourMode ? undefined : `tree-scroll:${info.root}`,
+  );
+  const setMain = useCallback((el: HTMLElement | null) => {
+    mainRef.current = el;
+    return restoreMainScroll(el);
+  }, [restoreMainScroll]);
   const sessionId = info?.sessionId ?? null;
-  const { data: threads = [] } = useReviewThreads(sessionId);
+  const { data: threads = NO_THREADS } = useReviewThreads(sessionId);
+  const { data: statuses } = useQuery(treeStatusOptions());
   const commentActions = useCommentActions(sessionId, !!sessionId);
 
   const { data: tourData } = useQuery({
@@ -195,7 +223,8 @@ export function TreePage(props: TreePageProps) {
     placeholderData: keepPreviousData,
   });
 
-  const contentFetching = isFileMode ? fileFetching : entriesFetching;
+  const contentLoading = isFileMode ? !fileContent && fileFetching : !entriesData && entriesFetching;
+  const reveal = useRevealClass(contentLoading);
 
   const commentCountsByFile = useMemo(() => {
     const map = new Map<string, number>();
@@ -248,6 +277,14 @@ export function TreePage(props: TreePageProps) {
       }
     },
     [handleFileClick, handleDirClick],
+  );
+
+  const handleCommentOnPath = useCallback(
+    (path: string, type: 'file' | 'dir') => {
+      handleNavigate(path, type);
+      setPathCommentRequest((n) => n + 1);
+    },
+    [handleNavigate],
   );
 
   const scrollToThreadElement = useCallback((threadId: string) => {
@@ -305,6 +342,7 @@ export function TreePage(props: TreePageProps) {
 
   const handleRefreshTree = useCallback(() => {
     queryClient.invalidateQueries({ queryKey: ['tree-paths'] });
+    queryClient.invalidateQueries({ queryKey: ['tree-status'] });
     queryClient.invalidateQueries({ queryKey: ['tree-entries'] });
     queryClient.invalidateQueries({ queryKey: ['tree-file-content'] });
     resetStaleness();
@@ -423,6 +461,56 @@ export function TreePage(props: TreePageProps) {
     }));
   }, [navPath]);
 
+  const paletteView = useMemo<PaletteView>(() => ({
+    repo: info.root,
+    filesLabel: 'Files',
+    files: paths.map((path) => ({ path, comments: commentCountsByFile.get(path) })),
+    openFile: handleFileClick,
+    threads,
+    openThread: handleScrollToThread,
+    editor: info.editor === 'vscode',
+  }), [info, paths, commentCountsByFile, handleFileClick, threads, handleScrollToThread]);
+  usePaletteView(paletteView);
+
+  const label = navPath ? navPath.split('/').pop()! : (info.name ?? 'root');
+  const canPreview = isFileMode && !!fileContent && isRenderableFile(navPath);
+  const paletteActions = useMemo<PaletteAction[]>(() => {
+    const list: PaletteAction[] = [
+      {
+        id: 'theme',
+        title: theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme',
+        group: 'View',
+        keywords: 'dark light mode appearance',
+        icon: theme === 'dark' ? <SunIcon className={iconClass} /> : <MoonIcon className={iconClass} />,
+        run: toggleTheme,
+      },
+      { id: 'filter-files', title: 'Filter files', hint: shortcutHint('filter-files'), keywords: 'sidebar search', icon: <SearchIcon className={iconClass} />, run: () => searchInputRef.current?.focus() },
+      { id: 'path-comment', title: `Comment on ${label}`, group: 'Comments', keywords: 'add comment note', icon: <CommentIcon className={iconClass} />, run: () => setPathCommentRequest((n) => n + 1) },
+    ];
+    if (navPath) {
+      const parent = navPath.includes('/') ? navPath.slice(0, navPath.lastIndexOf('/')) : '';
+      list.push({ id: 'parent-folder', title: 'Go to parent folder', group: 'Go to', keywords: 'up directory', icon: <ArrowUpIcon />, run: () => handleDirClick(parent) });
+    }
+    if (canPreview) {
+      list.push({
+        id: 'preview-mode',
+        title: previewMode === 'preview' ? 'Show code' : 'Show preview',
+        group: 'View',
+        keywords: 'source rendered markdown svg',
+        icon: previewMode === 'preview' ? <CodeIcon className={iconClass} /> : <FileIcon className={iconClass} />,
+        run: () => setPreviewMode(previewMode === 'preview' ? 'code' : 'preview'),
+      });
+    }
+    if (info.editor === 'vscode') {
+      list.push({ id: 'open-in-editor', title: `Open ${label} in editor`, keywords: 'vscode code', icon: <VscodeIcon className={iconClass} />, run: () => void openInEditorWithToast(navPath) });
+    }
+    if (tourData) {
+      list.push({ id: 'close-tour', title: 'Close tour', icon: <XIcon className={iconClass} />, run: handleTourClose });
+    }
+    return list;
+  }, [theme, toggleTheme, label, navPath, canPreview, previewMode, info.editor, tourData, handleDirClick, handleTourClose]);
+  usePaletteActions('tree', paletteActions);
+
   const pathKey = navPath || '__root__';
   const fileThreads = threads.filter((t) => t.filePath === navPath);
   const pathThreads = threads.filter(
@@ -442,6 +530,7 @@ export function TreePage(props: TreePageProps) {
               {info.name}
             </button>
           )}
+          <ViewTabs current='tree' />
           {info?.branch && (
             <span className='inline-flex items-center gap-1 px-1.5 py-0.5 bg-diff-hunk-bg text-diff-hunk-text rounded font-mono text-[11px] shrink-0'>
               <GitBranchIcon className='w-3 h-3' />
@@ -476,18 +565,24 @@ export function TreePage(props: TreePageProps) {
           paths={paths}
           activeFile={isFileMode ? navPath : null}
           commentCountsByFile={commentCountsByFile}
+          statuses={statuses}
+          repoRoot={info.root}
+          editor={info.editor === 'vscode'}
           onFileClick={handleFileClick}
           onDirClick={handleDirClick}
+          onCommentOnPath={handleCommentOnPath}
           focusFileTick={isTourMode ? tourScrollTick : undefined}
+          stateKey={isTourMode ? undefined : info.root}
         />
 
-        <main ref={mainRef} className='flex-1 overflow-y-auto p-6'>
+        <main ref={setMain} className='flex-1 overflow-y-auto p-6'>
           <PathComments
             pathKey={pathKey}
             threads={pathThreads}
             commentActions={commentActions}
-            label={navPath ? navPath.split('/').pop()! : (info.name ?? 'root')}
+            label={label}
             focusedThreadId={focusedThreadId}
+            composeRequest={pathCommentRequest}
           >
             <button
               className={
@@ -537,7 +632,7 @@ export function TreePage(props: TreePageProps) {
             {info?.editor === 'vscode' && (
               <button
                 className='ml-3 shrink-0 flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-bg-tertiary text-xs text-text-secondary hover:bg-hover hover:text-text cursor-pointer transition-colors'
-                onClick={() => openInEditor(navPath)}
+                onClick={() => void openInEditorWithToast(navPath)}
               >
                 <PencilIcon className='w-3 h-3' />
                 Open in Editor
@@ -545,37 +640,43 @@ export function TreePage(props: TreePageProps) {
             )}
           </PathComments>
 
-          {isFileMode ? (
-            fileContent ? (
-              isRenderableFile(navPath) && previewMode === 'preview' ? (
-                isMarkdownFile(navPath) ? (
-                  <MarkdownPreview content={fileContent} filePath={navPath} />
+          <div className={reveal}>
+            {isFileMode ? (
+              fileContent ? (
+                isRenderableFile(navPath) && previewMode === 'preview' ? (
+                  isMarkdownFile(navPath) ? (
+                    <MarkdownPreview content={fileContent} filePath={navPath} />
+                  ) : (
+                    <SvgPreview content={fileContent} />
+                  )
                 ) : (
-                  <SvgPreview content={fileContent} />
+                  <FileViewer
+                    filePath={navPath}
+                    content={fileContent}
+                    theme={theme}
+                    threads={fileThreads}
+                    commentActions={commentActions}
+                    sessionId={sessionId}
+                    tourHighlight={tourHighlight}
+                  />
                 )
+              ) : fileFetching ? (
+                <FileViewerSkeleton />
               ) : (
-                <FileViewer
-                  filePath={navPath}
-                  content={fileContent}
-                  theme={theme}
-                  threads={fileThreads}
-                  commentActions={commentActions}
-                  sessionId={sessionId}
-                  tourHighlight={tourHighlight}
-                />
+                <div className='flex items-center justify-center h-32 text-xs text-text-muted'>
+                  File not found
+                </div>
               )
-            ) : fileFetching ? null : (
+            ) : entries.length > 0 ? (
+              <FolderViewer entries={entries} onNavigate={handleNavigate} />
+            ) : entriesFetching ? (
+              <FolderSkeleton />
+            ) : (
               <div className='flex items-center justify-center h-32 text-xs text-text-muted'>
-                File not found
+                Empty directory
               </div>
-            )
-          ) : entries.length > 0 ? (
-            <FolderViewer entries={entries} onNavigate={handleNavigate} />
-          ) : entriesFetching ? null : (
-            <div className='flex items-center justify-center h-32 text-xs text-text-muted'>
-              Empty directory
-            </div>
-          )}
+            )}
+          </div>
         </main>
 
         {tourData && (

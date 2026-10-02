@@ -7,10 +7,15 @@ import { UploadIcon } from '../icons/upload-icon';
 import { DownloadIcon } from '../icons/download-icon';
 import { XIcon } from '../icons/x-icon';
 import { pushCommentsToGitHub, pullCommentsFromGitHub, type GitHubDetails, type PrCommentPayload } from '../../lib/api';
+import { errorMessage } from '../../lib/toast';
 import type { CommentThread } from '../comments/types';
 import { GENERAL_THREAD_FILE_PATH, isThreadResolved } from '../comments/types';
 
 dayjs.extend(relativeTime);
+
+function countComments(count: number): string {
+  return `${count} comment${count !== 1 ? 's' : ''}`;
+}
 
 interface GitHubDialogProps {
   details: GitHubDetails;
@@ -48,6 +53,8 @@ export function GitHubDialog(props: GitHubDialogProps) {
       return;
     }
     setPushing(true);
+    const id = toast.loading(`Pushing ${countComments(pushableThreads.length)} to PR #${details.prNumber}…`);
+    const retry = { label: 'Retry', onClick: () => void handlePush() };
     try {
       const comments: PrCommentPayload[] = pushableThreads.map(t => ({
         filePath: t.filePath,
@@ -60,19 +67,22 @@ export function GitHubDialog(props: GitHubDialogProps) {
       if (result.failed > 0) {
         const pushedMsg = result.pushed > 0 ? `${result.pushed} pushed, ` : '';
         toast.error(`${pushedMsg}${result.failed} failed`, {
+          id,
           description: result.errors.join('\n'),
+          action: retry,
         });
       } else if (result.pushed === 0 && result.skipped > 0) {
-        toast.info('All comments already exist on the PR');
+        toast.info('All comments already exist on the PR', { id });
       } else {
-        const skippedMsg = result.skipped > 0 ? ` (${result.skipped} already existed)` : '';
-        toast.success(`Pushed ${result.pushed} comment${result.pushed !== 1 ? 's' : ''} to PR${skippedMsg}`);
+        toast.success(`Pushed ${countComments(result.pushed)} to PR #${details.prNumber}`, {
+          id,
+          description: result.skipped > 0 ? `${result.skipped} already existed` : undefined,
+          action: { label: 'Open PR', onClick: () => window.open(details.prUrl, '_blank', 'noopener') },
+        });
       }
       setCommentCount(prev => prev + result.pushed);
     } catch (err) {
-      toast.error('Failed to push comments', {
-        description: err instanceof Error ? err.message : 'Unknown error',
-      });
+      toast.error('Failed to push comments', { id, description: errorMessage(err), action: retry });
     } finally {
       setPushing(false);
     }
@@ -83,18 +93,19 @@ export function GitHubDialog(props: GitHubDialogProps) {
       return;
     }
     setPulling(true);
+    const id = toast.loading(`Pulling comments from PR #${details.prNumber}…`);
     try {
       const result = await pullCommentsFromGitHub(sessionId);
-      if (result.pulled === 0 && result.skipped > 0) {
-        toast.info('All GitHub comments already exist locally');
-      } else if (result.pulled > 0) {
-        toast.success(`Pulled ${result.pulled} comment${result.pulled !== 1 ? 's' : ''} from PR`);
+      if (result.pulled > 0) {
+        toast.success(`Pulled ${countComments(result.pulled)} from PR #${details.prNumber}`, { id });
         onPulled();
+      } else if (result.skipped > 0) {
+        toast.info('All GitHub comments already exist locally', { id });
+      } else {
+        toast.info('No comments to pull', { id });
       }
     } catch (err) {
-      toast.error('Failed to pull comments', {
-        description: err instanceof Error ? err.message : 'Unknown error',
-      });
+      toast.error('Failed to pull comments', { id, description: errorMessage(err), action: { label: 'Retry', onClick: () => void handlePull() } });
     } finally {
       setPulling(false);
     }

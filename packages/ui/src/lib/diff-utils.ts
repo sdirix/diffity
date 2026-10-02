@@ -288,11 +288,11 @@ export function extractLinesFromExpandedLines(
 export function getStatusColor(status: string): string {
   switch (status) {
     case 'added':
-      return 'bg-added/15 text-added';
+      return 'bg-diff-added/15 text-diff-added';
     case 'deleted':
-      return 'bg-deleted/15 text-deleted';
+      return 'bg-diff-deleted/15 text-diff-deleted';
     case 'renamed':
-      return 'bg-renamed/15 text-renamed';
+      return 'bg-diff-renamed/15 text-diff-renamed';
     default:
       return 'bg-modified/15 text-modified';
   }

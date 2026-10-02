@@ -2,18 +2,28 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { DiffFile } from '@diffity/parser';
 import { FileTree } from '../tree/file-tree';
 import type { FileTreeHandle } from '../tree/file-tree';
+import { PathMenu, type PathMenuTarget } from '../tree/path-menu';
+import { fetchFileContent } from '../../lib/api';
 import { SidebarIcon } from '../icons/sidebar-icon';
 import { SearchIcon } from '../icons/search-icon';
 import { XIcon } from '../icons/x-icon';
 import { CommentIcon } from '../icons/comment-icon';
 import { CollapseAllIcon } from '../icons/collapse-all-icon';
 import { ExpandAllIcon } from '../icons/expand-all-icon';
+import { ListIcon } from '../icons/list-icon';
+import { TreeIcon } from '../icons/tree-icon';
+import { readPreference, writePreference } from '../../lib/preferences';
+
+const FLAT_PREFERENCE = 'sidebar-flat';
 
 interface SidebarProps {
   files: DiffFile[];
   activeFile: string | null;
   reviewedFiles: Set<string>;
   commentCountsByFile: Map<string, number>;
+  repoRoot: string;
+  editor: boolean;
+  diffRef: string;
   onFileClick: (path: string) => void;
   onCommentedFileClick: (path: string) => void;
 }
@@ -24,6 +34,9 @@ export function Sidebar(props: SidebarProps) {
     activeFile,
     reviewedFiles,
     commentCountsByFile,
+    repoRoot,
+    editor,
+    diffRef,
     onFileClick,
     onCommentedFileClick,
   } = props;
@@ -32,6 +45,8 @@ export function Sidebar(props: SidebarProps) {
   const [collapsed, setCollapsed] = useState(false);
   const [commentedFilesOnly, setCommentedFilesOnly] = useState(false);
   const [allExpanded, setAllExpanded] = useState(true);
+  const [flat, setFlat] = useState(() => readPreference(FLAT_PREFERENCE) === '1');
+  const [menu, setMenu] = useState<PathMenuTarget | null>(null);
 
   const commentedFileCount = commentCountsByFile.size;
   const commentedFileCountLabel = commentedFileCount > 99 ? '99+' : String(commentedFileCount);
@@ -83,22 +98,34 @@ export function Sidebar(props: SidebarProps) {
           </span>
         </span>
         <div className="flex items-center gap-0.5">
+          {!flat && (
+            <button
+              className="p-1 rounded-md text-text-muted hover:text-text hover:bg-hover cursor-pointer"
+              onClick={() => {
+                if (allExpanded) {
+                  fileTreeRef.current?.collapseAll();
+                } else {
+                  fileTreeRef.current?.expandAll();
+                }
+              }}
+              title={allExpanded ? 'Collapse all' : 'Expand all'}
+            >
+              {allExpanded ? (
+                <CollapseAllIcon className="w-3.5 h-3.5" />
+              ) : (
+                <ExpandAllIcon className="w-3.5 h-3.5" />
+              )}
+            </button>
+          )}
           <button
             className="p-1 rounded-md text-text-muted hover:text-text hover:bg-hover cursor-pointer"
             onClick={() => {
-              if (allExpanded) {
-                fileTreeRef.current?.collapseAll();
-              } else {
-                fileTreeRef.current?.expandAll();
-              }
+              writePreference(FLAT_PREFERENCE, flat ? null : '1');
+              setFlat(!flat);
             }}
-            title={allExpanded ? 'Collapse all' : 'Expand all'}
+            title={flat ? 'Show as tree' : 'Show as list'}
           >
-            {allExpanded ? (
-              <CollapseAllIcon className="w-3.5 h-3.5" />
-            ) : (
-              <ExpandAllIcon className="w-3.5 h-3.5" />
-            )}
+            {flat ? <TreeIcon className="w-3.5 h-3.5" /> : <ListIcon className="w-3.5 h-3.5" />}
           </button>
           <button
             className="p-1 rounded-md text-text-muted hover:text-text hover:bg-hover cursor-pointer"
@@ -161,9 +188,27 @@ export function Sidebar(props: SidebarProps) {
         reviewedFiles={reviewedFiles}
         commentCountsByFile={commentCountsByFile}
         commentedFilesOnly={commentedFilesOnly}
+        flat={flat}
         onFileClick={handleTreeFileClick}
         onExpandedStateChange={setAllExpanded}
+        onMenu={(node, at) => setMenu({
+          path: node.path,
+          type: node.type,
+          at,
+          binary: node.type === 'file' && !!node.file?.isBinary,
+          deleted: node.type === 'file' && node.file?.status === 'deleted',
+        })}
+        menuPath={menu?.path}
       />
+      {menu && (
+        <PathMenu
+          target={menu}
+          root={repoRoot}
+          editor={editor}
+          loadContents={(path) => fetchFileContent(path, diffRef, 'new')}
+          onClose={() => setMenu(null)}
+        />
+      )}
     </aside>
   );
 }

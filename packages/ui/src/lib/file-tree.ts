@@ -162,3 +162,45 @@ export function collectAllDirPaths(nodes: TreeNode[]): string[] {
   }
   return paths;
 }
+
+/** Whether every folder in `dirPaths` is in `expanded`, which may also hold paths that are no folder of the tree. */
+export function allDirsExpanded(dirPaths: string[], expanded: Set<string>): boolean {
+  return dirPaths.every((path) => expanded.has(path));
+}
+
+/** The paths in `expanded` that are folders in `dirPaths`. */
+export function knownExpandedDirs(expanded: Iterable<string>, dirPaths: string[]): string[] {
+  const dirs = new Set(dirPaths);
+  return [...expanded].filter((path) => dirs.has(path));
+}
+
+/** Every folder above one of `paths`, for marking folders that contain a match. */
+export function ancestorDirs(paths: Iterable<string>): Set<string> {
+  const dirs = new Set<string>();
+  for (const path of paths) {
+    for (let slash = path.indexOf('/'); slash !== -1; slash = path.indexOf('/', slash + 1)) {
+      dirs.add(path.slice(0, slash));
+    }
+  }
+  return dirs;
+}
+
+export interface TreeRow {
+  node: TreeNode;
+  depth: number;
+}
+
+export function rowPath(row: TreeRow): string {
+  return row.node.path;
+}
+
+/** The rows of `nodes` with the `expanded` folders open, in display order. */
+export function visibleRows(nodes: TreeNode[], expanded: Set<string>, depth = 0, out: TreeRow[] = []): TreeRow[] {
+  for (const node of nodes) {
+    out.push({ node, depth });
+    if (node.type === 'dir' && expanded.has(node.path)) {
+      visibleRows(node.children, expanded, depth + 1, out);
+    }
+  }
+  return out;
+}

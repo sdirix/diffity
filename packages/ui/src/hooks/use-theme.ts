@@ -1,4 +1,5 @@
 import { useState, useLayoutEffect, useCallback, useSyncExternalStore } from 'react';
+import { readPreference, writePreference } from '../lib/preferences';
 
 type Theme = 'light' | 'dark';
 
@@ -6,7 +7,7 @@ function getStoredTheme(): Theme | null {
   if (typeof window === 'undefined') {
     return null;
   }
-  return localStorage.getItem('diffity-theme') as Theme | null;
+  return readPreference('theme') as Theme | null;
 }
 
 export function getTheme(): Theme {
@@ -26,7 +27,7 @@ export function useDocumentTheme(): Theme {
 
 export function useTheme(initialTheme?: Theme | null) {
   const [theme, setTheme] = useState<Theme>(
-    () => getStoredTheme() || initialTheme || 'light'
+    () => getStoredTheme() || initialTheme || getTheme()
   );
 
   useLayoutEffect(() => {
@@ -36,7 +37,7 @@ export function useTheme(initialTheme?: Theme | null) {
   const toggleTheme = useCallback(() => {
     setTheme(prev => {
       const next = prev === 'light' ? 'dark' : 'light';
-      localStorage.setItem('diffity-theme', next);
+      writePreference('theme', next);
       return next;
     });
   }, []);

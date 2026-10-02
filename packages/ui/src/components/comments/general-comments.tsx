@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { GENERAL_THREAD_FILE_PATH, isThreadResolved, DEFAULT_AUTHOR } from './types';
 import type { CommentThread as CommentThreadType } from './types';
 import type { CommentActions } from '../../hooks/use-comment-actions';
@@ -10,17 +10,29 @@ import { ThreadCard } from './thread-card';
 interface GeneralCommentsProps {
   threads: CommentThreadType[];
   commentActions: CommentActions;
+  /** Opens the form whenever it changes. */
+  composeRequest?: number;
 }
 
 export function GeneralComments(props: GeneralCommentsProps) {
-  const { threads: allThreads, commentActions } = props;
+  const { threads: allThreads, commentActions, composeRequest } = props;
 
   const threads = allThreads.filter(t => t.filePath === GENERAL_THREAD_FILE_PATH);
   const [isExpanded, setIsExpanded] = useState(threads.length > 0);
   const [showForm, setShowForm] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!composeRequest) {
+      return;
+    }
+    setIsExpanded(true);
+    setShowForm(true);
+    containerRef.current?.scrollIntoView({ block: 'nearest' });
+  }, [composeRequest]);
 
   return (
-    <div className={`rounded-lg mx-4 mt-4 overflow-hidden ${threads.length > 0 ? 'bg-accent/5' : 'bg-bg-secondary'}`}>
+    <div ref={containerRef} className={`rounded-lg mx-4 mt-4 overflow-hidden ${threads.length > 0 ? 'bg-accent/5' : 'bg-bg-secondary'}`}>
       <div className="flex items-center gap-2 px-3 py-2 text-sm select-none">
         <button
           onClick={() => setIsExpanded(!isExpanded)}

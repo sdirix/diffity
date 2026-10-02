@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState, useCallback, useImperativeHandle, useEffect } from 'react';
-import { useVirtualizer } from '@tanstack/react-virtual';
+import { useVirtualizer, type Rect, type VirtualItem } from '@tanstack/react-virtual';
 import type { ParsedDiff } from '@diffity/parser';
 import { FileBlock, LARGE_DIFF_LINE_THRESHOLD } from './file-block';
 import { GeneralComments } from '../comments/general-comments';
@@ -18,6 +18,8 @@ function flashThreadElement(element: Element) {
 export interface DiffViewHandle {
   scrollToFile: (path: string) => void;
   scrollToThread: (threadId: string, filePath: string) => void;
+  /** Brings a line rendered with `data-find-line` into view, mounting its file first. */
+  scrollToLine: (path: string, key: string) => void;
 }
 
 const VIRTUALIZER_OVERSCAN = 3;
@@ -26,6 +28,8 @@ const EMPTY_CONTENT_HEIGHT = 100;
 const LINE_HEIGHT = 24;
 const HUNK_HEADER_HEIGHT = 32;
 const FILE_BLOCK_PADDING = 16;
+/** Lines closer than this to the top of the scroller sit under the sticky file header. */
+const STICKY_HEADER_OFFSET = 48;
 
 interface DiffViewProps {
   diff: ParsedDiff;
@@ -47,6 +51,52 @@ interface DiffViewProps {
   onAddThread: CommentActions['addThread'];
   pendingSelection: LineSelection | null;
   onPendingSelectionChange: (selection: LineSelection | null) => void;
+  /** The file of the current find match, rendered even when its diff is large. */
+  findFile?: string | null;
+  /** Opens the general comment form whenever it changes. */
+  generalCommentRequest?: number;
+}
+
+interface SavedScroll {
+  offset: number;
+  rect: Rect | null;
+  measurements: VirtualItem[];
+}
+
+/** Where each diff was scrolled to, so it opens there again when shown after another view. */
+const savedScrolls = new WeakMap<ParsedDiff, SavedScroll>();
+
+function isLineInView(element: Element, scroller: HTMLElement): boolean {
+  const rect = element.getBoundingClientRect();
+  const bounds = scroller.getBoundingClientRect();
+  return rect.top >= bounds.top + STICKY_HEADER_OFFSET && rect.bottom <= bounds.bottom - 16;
+}
+
+/** Waits up to 2s for the line to mount, then keeps it in view for 500ms while the virtualizer settles. */
+function settleOnLine(scroller: HTMLElement, selector: string): () => void {
+  let frame = 0;
+  let foundAt = 0;
+  const started = performance.now();
+
+  const tick = () => {
+    const now = performance.now();
+    const element = scroller.querySelector(selector);
+    if (element) {
+      foundAt = foundAt || now;
+      if (!isLineInView(element, scroller)) {
+        element.scrollIntoView({ behavior: 'instant', block: 'center' });
+      }
+      if (now - foundAt > 500) {
+        return;
+      }
+    } else if (now - started > 2000) {
+      return;
+    }
+    frame = requestAnimationFrame(tick);
+  };
+
+  frame = requestAnimationFrame(tick);
+  return () => cancelAnimationFrame(frame);
 }
 
 function estimateFileHeight(file: { hunks: { lines: { length: number } }[]; isBinary: boolean }, collapsed: boolean): number {
@@ -72,7 +122,7 @@ export function DiffView(props: DiffViewProps) {
     reviewedFiles, onReviewedChange, onActiveFileChange, scrollRef,
     handle, baseRef, canRevert, onRevert,
     threads, commentsEnabled, commentActions, onAddThread,
-    pendingSelection, onPendingSelectionChange,
+    pendingSelection, onPendingSelectionChange, findFile, generalCommentRequest,
   } = props;
   const { tokenize, ready: highlighterReady } = useHighlighter();
   const scrollElementRef = useRef<HTMLElement>(null);
@@ -91,17 +141,33 @@ export function DiffView(props: DiffViewProps) {
     return map;
   }, [diff, tokenize, theme, highlighterReady]);
 
+  const [restored] = useState(() => savedScrolls.get(diff));
+
   const virtualizer = useVirtualizer({
     count: diff.files.length,
     getScrollElement: () => scrollElementRef.current,
     estimateSize: (index) => estimateFileHeight(diff.files[index], collapsedFiles.has(getFilePath(diff.files[index]))),
     overscan: VIRTUALIZER_OVERSCAN,
+    initialOffset: restored?.offset,
+    initialRect: restored?.rect ?? undefined,
+    initialMeasurementsCache: restored?.measurements,
   });
+
+  useEffect(() => () => {
+    savedScrolls.set(diff, {
+      offset: virtualizer.scrollOffset ?? 0,
+      rect: virtualizer.scrollRect,
+      measurements: virtualizer.measurementsCache,
+    });
+  }, [diff, virtualizer]);
 
   const scrollTargetRef = useRef<string | null>(null);
   const [highlightedFile, setHighlightedFile] = useState<string | null>(null);
 
   const [pendingThreadScroll, setPendingThreadScroll] = useState<string | null>(null);
+  const cancelLineScrollRef = useRef<(() => void) | null>(null);
+
+  useEffect(() => () => cancelLineScrollRef.current?.(), []);
 
   const settleScrollToElement = useCallback((selector: string, align: ScrollLogicalPosition, onFound?: (el: Element) => void) => {
     let disposed = false;
@@ -186,6 +252,24 @@ export function DiffView(props: DiffViewProps) {
         setPendingThreadScroll(threadId);
       }
     },
+    scrollToLine: (path: string, key: string) => {
+      const scroller = scrollElementRef.current;
+      if (!scroller) {
+        return;
+      }
+      cancelLineScrollRef.current?.();
+      if (!document.getElementById(`file-${encodeURIComponent(path)}`)) {
+        const index = diff.files.findIndex((f) => getFilePath(f) === path);
+        if (index < 0) {
+          return;
+        }
+        virtualizer.scrollToIndex(index, { align: 'start' });
+      }
+      cancelLineScrollRef.current = settleOnLine(
+        scroller,
+        `[data-find-scope="${CSS.escape(path)}"] [data-find-line="${CSS.escape(key)}"]`,
+      );
+    },
   }), [diff.files, virtualizer, settleScrollToElement]);
 
   useEffect(() => {
@@ -269,6 +353,7 @@ export function DiffView(props: DiffViewProps) {
         <GeneralComments
           threads={threads}
           commentActions={commentActions}
+          composeRequest={generalCommentRequest}
         />
       )}
       <div className="py-2" style={{ paddingTop, paddingBottom }}>
@@ -305,6 +390,7 @@ export function DiffView(props: DiffViewProps) {
                 onAddThread={onAddThread}
                 pendingSelection={pendingSelection}
                 onPendingSelectionChange={onPendingSelectionChange}
+                expandLargeDiff={findFile === filePath}
               />
             </div>
           );

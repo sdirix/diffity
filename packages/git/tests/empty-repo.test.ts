@@ -4,12 +4,12 @@ import { getRecentCommits } from '../src/commits.js';
 import {
   getBaseFileContent,
   getDiffFiles,
-  getDiffStatForRef,
   getFileLineCounts,
   resolveBaseRef,
   resolveRef,
 } from '../src/diff.js';
 import { InputError } from '../src/errors.js';
+import { getDiffFingerprint } from '../src/fingerprint.js';
 import { getHeadHash } from '../src/refs.js';
 import { getCurrentBranch, getRepoInfo } from '../src/repo.js';
 import { getStagedFiles, getUnstagedFiles } from '../src/status.js';
@@ -48,7 +48,8 @@ describe('repository without commits', () => {
     ]);
     expect(parseDiff(resolveRef('staged')).files.map((f) => f.newPath)).toEqual(['staged.txt']);
     expect(getDiffFiles('work').sort()).toEqual(['staged.txt', 'untracked.txt']);
-    expect(getDiffStatForRef('work')).toContain('staged.txt');
+    expect(getDiffFingerprint('work')).toMatch(/^[0-9a-f]{40}$/);
+    expect(getDiffFingerprint('staged')).not.toBe(getDiffFingerprint('work'));
     expect(getStagedFiles()).toEqual(['staged.txt']);
     expect(getUnstagedFiles()).toEqual([]);
   });

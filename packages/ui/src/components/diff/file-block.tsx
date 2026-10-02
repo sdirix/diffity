@@ -7,6 +7,7 @@ import type { CodeHighlighter } from '../../hooks/use-highlighter';
 import type { CommentSide, LineSelection } from '../comments/types';
 import { type ViewMode, getFilePath, buildChangeGroupPatch, extractLinesFromDiff, extractLinesFromExpandedLines } from '../../lib/diff-utils';
 import { revertHunk as apiRevertHunk } from '../../lib/api';
+import { withToast } from '../../lib/toast';
 import { ConfirmDialog } from '../ui/confirm-dialog';
 import { computeGaps, createContextLines, getExpandRange, type ExpandableGap } from '../../lib/context-expansion';
 import { fileContentOptions, headFileContentOptions } from '../../queries/file';
@@ -65,6 +66,8 @@ interface FileBlockProps {
   onPendingSelectionChange: (selection: LineSelection | null) => void;
   highlighted?: boolean;
   onHighlightEnd?: () => void;
+  /** Renders a large diff without waiting for "Load diff", for example to show a find match. */
+  expandLargeDiff?: boolean;
 }
 
 interface GapExpansion {
@@ -78,13 +81,16 @@ export function FileBlock(props: FileBlockProps) {
   const {
     file, viewMode, collapsed, onToggleCollapse, reviewed, onReviewedChange, highlightCode, baseRef, theme, canRevert, onRevert,
     threads: allThreads, commentsEnabled, commentActions, onAddThread: rawAddThread, pendingSelection, onPendingSelectionChange,
-    highlighted, onHighlightEnd,
+    highlighted, onHighlightEnd, expandLargeDiff,
   } = props;
 
   const totalLines = getTotalLineCount(file);
   const isLargeDiff = totalLines >= LARGE_DIFF_LINE_THRESHOLD;
 
   const [largeDiffExpanded, setLargeDiffExpanded] = useState(false);
+  if (expandLargeDiff && isLargeDiff && !largeDiffExpanded) {
+    setLargeDiffExpanded(true);
+  }
   const [expansions, setExpansions] = useState<Map<string, GapExpansion>>(new Map());
   const [loadingGap, setLoadingGap] = useState<{ id: string; direction: 'up' | 'down' | 'all' } | null>(null);
 
@@ -113,8 +119,14 @@ export function FileBlock(props: FileBlockProps) {
   const handleRevertChange = useCallback(async (info: { hunk: DiffHunk; startIndex: number; endIndex: number }) => {
     setConfirmRevertChange(null);
     const patch = buildChangeGroupPatch(file, info.hunk, info.startIndex, info.endIndex);
-    await apiRevertHunk(patch);
-    onRevert?.();
+    const reverted = await withToast(apiRevertHunk(patch), {
+      loading: 'Undoing change…',
+      success: 'Change undone',
+      error: 'Failed to undo the change',
+    });
+    if (reverted) {
+      onRevert?.();
+    }
   }, [file, onRevert]);
 
 
@@ -401,6 +413,7 @@ export function FileBlock(props: FileBlockProps) {
     <div
       className={`border rounded-lg mx-4 my-3 overflow-clip ${highlighted ? 'animate-flash-highlight-border' : 'border-border'}`}
       id={`file-${encodeURIComponent(filePath)}`}
+      data-find-scope={filePath}
       onAnimationEnd={onHighlightEnd}
     >
       <div
@@ -428,7 +441,7 @@ export function FileBlock(props: FileBlockProps) {
           )}
         </button>
         <button
-          onClick={() => copyPath(filePath)}
+          onClick={() => copyPath(filePath, 'Path copied')}
           className="shrink-0 text-text-muted hover:text-text transition-colors cursor-pointer"
           title="Copy file path"
         >
@@ -468,10 +481,10 @@ export function FileBlock(props: FileBlockProps) {
             <DiffStats additions={file.additions} deletions={file.deletions} />
             <div className="flex gap-px">
               {Array.from({ length: addBlocks }).map((_, i) => (
-                <span key={`a${i}`} className="w-1.5 h-1.5 rounded-sm bg-added" />
+                <span key={`a${i}`} className="w-1.5 h-1.5 rounded-sm bg-diff-added" />
               ))}
               {Array.from({ length: delBlocks }).map((_, i) => (
-                <span key={`d${i}`} className="w-1.5 h-1.5 rounded-sm bg-deleted" />
+                <span key={`d${i}`} className="w-1.5 h-1.5 rounded-sm bg-diff-deleted" />
               ))}
               {Array.from({ length: neutralBlocks }).map((_, i) => (
                 <span key={`n${i}`} className="w-1.5 h-1.5 rounded-sm bg-border" />
@@ -508,7 +521,7 @@ export function FileBlock(props: FileBlockProps) {
             </div>
           ) : isLargeDiff && !largeDiffExpanded && allFileThreads.length === 0 ? (
             <div className="flex items-center justify-center gap-3 py-6 px-4 text-sm text-text-muted">
-              <span>Large diff not rendered — {totalLines} lines</span>
+              <span>Large diff not rendered ({totalLines} lines)</span>
               <button
                 className="text-accent hover:underline cursor-pointer font-medium"
                 onClick={() => setLargeDiffExpanded(true)}

@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { git, gitNul } from './exec.js';
+import { gitNul } from './exec.js';
 import { assertRepoPath, resolveInRepo } from './paths.js';
 
 export interface TreeEntry {
@@ -56,13 +56,6 @@ export function getTreeEntries(_ref = 'HEAD', dirPath?: string): TreeEntry[] {
   }
 
   return Array.from(entries.values());
-}
-
-export function getTreeFingerprint(): string {
-  const tracked = git(['ls-files', '-z']);
-  const statOutput = git(['status', '--porcelain', '-u']).trim();
-
-  return `${tracked.length}:${statOutput}`;
 }
 
 export function getWorkingTreeFileContent(filePath: string): string {

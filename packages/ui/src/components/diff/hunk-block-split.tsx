@@ -130,6 +130,8 @@ function SplitCell(props: {
   const lineNum = side === 'left' ? line.oldLineNumber : line.newLineNumber;
   const syntaxKey = getSyntaxKey(line);
   const tokens = syntaxMap?.get(syntaxKey);
+  // A context line shows on both sides, find marks it on the new side only.
+  const findKey = side === 'left' && line.type === 'context' ? undefined : syntaxKey;
 
   return (
     <>
@@ -148,7 +150,7 @@ function SplitCell(props: {
         onMouseEnter={() => setContentHovered(true)}
         onMouseLeave={() => setContentHovered(false)}
       >
-        <span className="inline">{renderContent(line, tokens)}</span>
+        <span className="inline" data-find-line={findKey}>{renderContent(line, tokens)}</span>
       </td>
     </>
   );

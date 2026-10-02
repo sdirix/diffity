@@ -3,7 +3,6 @@ import {
   type IncomingMessage,
   type ServerResponse,
 } from 'node:http';
-import { createHash } from 'node:crypto';
 import { execSync, execFile } from 'node:child_process';
 import { readFileSync, existsSync } from 'node:fs';
 import { join, extname } from 'node:path';
@@ -12,16 +11,13 @@ import { dirname } from 'node:path';
 import { parseDiff, type ParsedDiff } from '@diffity/parser';
 import {
   getDiff,
-  getDiffStatForRef,
-  getDiffStat,
+  getDiffFingerprint,
   getUntrackedFiles,
   getUntrackedDiff,
   getRepoInfo,
   getFileContent,
   getIndexFileContent,
   getBaseFileContent,
-  getStagedFiles,
-  getUnstagedFiles,
   getRecentCommits,
   getFileLineCounts,
   resolveBaseRef,
@@ -55,6 +51,8 @@ import { createThread, addReply, getThreadsForSession } from './threads.js';
 import { transaction } from './db.js';
 import { handleReviewRoute } from './review-routes.js';
 import { handleTourRoute } from './tour-routes.js';
+import { handleRefRoute } from './ref-routes.js';
+import { handleTreeStatusRoute } from './tree-status-routes.js';
 import { sendJson, sendError, readBody } from './http-utils.js';
 import {
   registerInstance,
@@ -184,6 +182,11 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
     return diff;
   }
 
+  /** The fingerprint of the diff `/api/diff` returns for `ref`, read before the diff itself. */
+  function fingerprintFor(ref: string | null): string {
+    return getDiffFingerprint(ref || diffArgs[0] || 'work');
+  }
+
   function getFullDiff(args: string[]): string {
     let raw = getDiff(args);
     if (includeUntracked) {
@@ -295,34 +298,6 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
           return;
         }
 
-        if (pathname === '/api/overview') {
-          try {
-            const staged = getStagedFiles();
-            const unstaged = getUnstagedFiles();
-            const untracked = getUntrackedFiles();
-
-            const fileMap = new Map<string, string>();
-            for (const f of staged) {
-              fileMap.set(f, 'staged');
-            }
-            for (const f of unstaged) {
-              fileMap.set(f, 'modified');
-            }
-            for (const f of untracked) {
-              fileMap.set(f, 'added');
-            }
-
-            const files = Array.from(fileMap.entries()).map(
-              ([path, status]) => ({ path, status }),
-            );
-
-            sendJson(res, { files });
-          } catch (err) {
-            sendError(res, 500, `Failed to get overview: ${err}`);
-          }
-          return;
-        }
-
         if (pathname === '/api/commits') {
           const count = parseInt(url.searchParams.get('count') || '10', 10);
           const skip = parseInt(url.searchParams.get('skip') || '0', 10);
@@ -337,21 +312,7 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
         }
 
         if (pathname === '/api/diff-fingerprint') {
-          const ref = url.searchParams.get('ref');
-          let stat: string;
-          if (ref) {
-            stat = getDiffStatForRef(ref);
-          } else {
-            stat = getDiffStat(diffArgs);
-            if (includeUntracked) {
-              stat += '\n' + getUntrackedFiles().join('\n');
-            }
-          }
-          const hash = createHash('sha1')
-            .update(stat)
-            .digest('hex')
-            .slice(0, 12);
-          sendJson(res, { fingerprint: hash });
+          sendJson(res, { fingerprint: fingerprintFor(url.searchParams.get('ref')) });
           return;
         }
 
@@ -370,26 +331,24 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
 
         if (pathname === '/api/diff') {
           const ref = url.searchParams.get('ref');
+          const fingerprint = fingerprintFor(ref);
           const whitespace = url.searchParams.get('whitespace');
           const extraArgs = whitespace === 'hide' ? ['-w'] : [];
           const base = resolveBaseRef(ref || 'work');
 
           if (ref) {
-            sendJson(
-              res,
-              enrichWithLineCounts(
-                parseDiff(resolveRef(ref, extraArgs)),
-                base,
-              ),
-            );
+            sendJson(res, {
+              ...enrichWithLineCounts(parseDiff(resolveRef(ref, extraArgs)), base),
+              fingerprint,
+            });
             return;
           }
 
           const args = whitespace === 'hide' ? [...diffArgs, '-w'] : diffArgs;
-          sendJson(
-            res,
-            enrichWithLineCounts(parseDiff(getFullDiff(args)), base),
-          );
+          sendJson(res, {
+            ...enrichWithLineCounts(parseDiff(getFullDiff(args)), base),
+            fingerprint,
+          });
           return;
         }
 
@@ -542,19 +501,15 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
         }
 
         if (pathname === '/api/tree/fingerprint') {
-          const raw = getTreeFingerprint();
-          const hash = createHash('sha1')
-            .update(raw)
-            .digest('hex')
-            .slice(0, 12);
-          sendJson(res, { fingerprint: hash });
+          sendJson(res, { fingerprint: getTreeFingerprint() });
           return;
         }
 
         if (pathname === '/api/tree') {
           try {
+            const fingerprint = getTreeFingerprint();
             const paths = getTree();
-            sendJson(res, { paths });
+            sendJson(res, { paths, fingerprint });
           } catch (err) {
             sendError(res, 500, `Failed to get tree: ${err}`);
           }
@@ -621,6 +576,14 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
         }
 
         if (handleTourRoute(req, res, pathname, url)) {
+          return;
+        }
+
+        if (handleRefRoute(req, res, pathname, url)) {
+          return;
+        }
+
+        if (handleTreeStatusRoute(req, res, pathname)) {
           return;
         }
 

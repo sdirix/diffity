@@ -5,6 +5,7 @@ interface SegmentedToggleOption<T extends string> {
   value: T;
   label: string;
   icon?: ReactNode;
+  title?: string;
 }
 
 interface SegmentedToggleProps<T extends string> {
@@ -30,6 +31,7 @@ export function SegmentedToggle<T extends string>(props: SegmentedToggleProps<T>
                 : 'bg-bg-tertiary text-text-secondary hover:bg-hover hover:text-text'
             )}
             onClick={() => onChange(option.value)}
+            title={option.title}
           >
             {option.icon}
             {option.label}

@@ -5,6 +5,10 @@ import { Toaster } from "sonner";
 import NProgress from "nprogress";
 import { queryClient } from "./lib/query-client";
 import { ErrorPage } from "./components/error-page";
+import { CommandPalette } from "./components/layout/command-palette";
+import { PageSkeleton } from "./components/layout/skeleton";
+import { APPLY_STORED_COLOURS } from "./lib/preferences";
+import "./lib/diff-palette";
 import "nprogress/nprogress.css";
 import "./styles/app.css";
 
@@ -12,12 +16,13 @@ export function Layout(props: { children: React.ReactNode }) {
   const { children } = props;
 
   return (
-    <html lang="en">
+    <html lang="en" suppressHydrationWarning>
       <head>
         <meta charSet="UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
         <title>diffity</title>
         <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+        <script dangerouslySetInnerHTML={{ __html: APPLY_STORED_COLOURS }} />
         <Meta />
         <Links />
       </head>
@@ -56,14 +61,25 @@ export default function App() {
     <QueryClientProvider client={queryClient}>
       <NavigationProgress />
       <Outlet />
+      <CommandPalette />
       <Toaster
         position="bottom-right"
+        gap={8}
+        swipeDirections={["right"]}
         toastOptions={{
           style: {
             background: "var(--color-bg-secondary)",
             color: "var(--color-text)",
             border: "1px solid var(--color-border)",
+            boxShadow: "var(--shadow-md)",
             fontSize: "13px",
+            fontFamily: "var(--font-sans)",
+            padding: "10px 12px",
+          },
+          classNames: {
+            description: "!text-text-secondary !text-xs",
+            actionButton: "!bg-accent !text-white hover:!bg-accent-hover !h-6 !px-2 !rounded-md !text-xs !font-medium",
+            cancelButton: "!bg-transparent !text-text-secondary hover:!bg-hover hover:!text-text !h-6 !px-2 !rounded-md !text-xs !font-medium",
           },
         }}
       />
@@ -86,9 +102,5 @@ export function ErrorBoundary() {
 }
 
 export function HydrateFallback() {
-  return (
-    <div className="flex items-center justify-center h-screen bg-bg">
-      <div className="w-6 h-6 border-2 border-accent/30 border-t-accent rounded-full animate-spin" />
-    </div>
-  );
+  return <PageSkeleton />;
 }

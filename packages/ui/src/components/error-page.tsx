@@ -14,7 +14,7 @@ export function ErrorPage(props: ErrorPageProps) {
   let detail = "";
 
   if (isRouteErrorResponse(error)) {
-    title = `${error.status} — ${error.statusText || "Error"}`;
+    title = `${error.status} ${error.statusText || "Error"}`;
     if (error.data?.message) {
       message = error.data.message;
     }
@@ -26,7 +26,7 @@ export function ErrorPage(props: ErrorPageProps) {
     } else {
       message = lines[0];
     }
-    detail = error.message;
+    detail = error.message === message ? "" : error.message;
   }
 
   return (

@@ -7,16 +7,22 @@ import { SegmentedToggle } from '../ui/segmented-toggle';
 import { EyeIcon } from '../icons/eye-icon';
 import { EyeOffIcon } from '../icons/eye-off-icon';
 import { KeyboardIcon } from '../icons/keyboard-icon';
+import { ContrastIcon } from '../icons/contrast-icon';
 import { GitBranchIcon } from '../icons/git-branch-icon';
 import { GitHubIcon } from '../icons/github-icon';
 import { DiffStats } from '../diff/diff-stats';
 import { GitHubDialog } from './github-dialog';
 import { CommentToolbarActions } from '../comments/comment-toolbar-actions';
 import { OptionsMenu, menuItemClass } from './options-menu';
+import { RefMenu, UncommittedToggle } from './ref-menu';
+import { ViewTabs } from './view-tabs';
 import { GENERAL_THREAD_FILE_PATH } from '../comments/types';
 import type { ViewMode } from '../../lib/diff-utils';
 import type { CommentThread } from '../comments/types';
 import { isThreadResolved } from '../comments/types';
+import { shortcutHint } from '../../lib/shortcuts';
+import { usePaletteActions, type PaletteAction } from '../../hooks/use-palette';
+import { setDiffPalette, useDiffPalette } from '../../lib/diff-palette';
 
 interface ToolbarProps {
   viewMode: ViewMode;
@@ -27,13 +33,14 @@ interface ToolbarProps {
   onToggleTheme: () => void;
   onShowHelp: () => void;
   diff?: ParsedDiff;
-  diffRef?: string;
+  diffRef: string;
+  refMenuOpen: boolean;
+  onRefMenuOpenChange: (open: boolean) => void;
   threads: CommentThread[];
   onDeleteAllComments: () => void;
   onScrollToThread: (threadId: string, filePath: string) => void;
   repoName: string | null;
   branch: string | null;
-  description: string | null;
   githubDetails?: { prNumber: number; prTitle: string; prUrl: string; prCreatedAt: string; headSha: string; commentCount: number } | null;
   sessionId?: string | null;
   onGitHubPulled?: () => void;
@@ -122,17 +129,28 @@ export function Toolbar(props: ToolbarProps) {
     onShowHelp,
     diff,
     diffRef,
+    refMenuOpen,
+    onRefMenuOpenChange,
     threads,
     onDeleteAllComments,
     onScrollToThread,
     repoName,
     branch,
-    description,
     githubDetails,
     sessionId,
     onGitHubPulled,
   } = props;
   const [showGitHub, setShowGitHub] = useState(false);
+  const diffPalette = useDiffPalette();
+
+  const paletteActions = useMemo<PaletteAction[]>(() => githubDetails ? [{
+    id: 'github-pr',
+    title: `Pull request #${githubDetails.prNumber}`,
+    keywords: `github pr push pull comments ${githubDetails.prTitle}`,
+    icon: <GitHubIcon className="w-3.5 h-3.5" />,
+    run: () => setShowGitHub(true),
+  }] : [], [githubDetails]);
+  usePaletteActions('github', paletteActions);
 
   const formatForCopy = useCallback(() => {
     return formatThreadsForCopy(threads, diff, diffRef);
@@ -147,13 +165,15 @@ export function Toolbar(props: ToolbarProps) {
     <div className="flex items-center gap-3 px-4 py-1.5 bg-bg-secondary border-b border-border font-sans text-xs">
       <div className="flex items-center gap-2.5 min-w-0 shrink">
         {repoName && <span className="font-semibold text-text text-sm truncate">{repoName}</span>}
+        <ViewTabs current="diff" />
         {branch && (
           <span className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-diff-hunk-bg text-diff-hunk-text rounded font-mono text-[11px] shrink-0">
             <GitBranchIcon className="w-3 h-3" />
             {branch}
           </span>
         )}
-        {description && <span className="text-text-muted truncate hidden lg:inline">{description}</span>}
+        <RefMenu diffRef={diffRef} branch={branch} open={refMenuOpen} onOpenChange={onRefMenuOpenChange} />
+        <UncommittedToggle diffRef={diffRef} />
         {diff && (
           <span className="inline-flex items-center bg-bg-tertiary rounded-md overflow-hidden text-text-muted shrink-0">
             <span className="px-2 py-0.5">{diff.stats.filesChanged} file{diff.stats.filesChanged !== 1 ? 's' : ''} changed</span>
@@ -199,13 +219,24 @@ export function Toolbar(props: ToolbarProps) {
               <button
                 className={menuItemClass}
                 onClick={() => {
+                  setDiffPalette(diffPalette === 'colorblind' ? 'default' : 'colorblind');
+                  close();
+                }}
+              >
+                <ContrastIcon className="w-3.5 h-3.5" />
+                Colour-blind colours
+                {diffPalette === 'colorblind' && <span className="ml-auto text-accent text-[10px]">On</span>}
+              </button>
+              <button
+                className={menuItemClass}
+                onClick={() => {
                   onShowHelp();
                   close();
                 }}
               >
                 <KeyboardIcon className="w-3.5 h-3.5" />
                 Keyboard shortcuts
-                <span className="ml-auto text-text-muted">?</span>
+                <span className="ml-auto text-text-muted">{shortcutHint('shortcuts')}</span>
               </button>
             </>
           )}

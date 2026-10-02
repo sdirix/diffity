@@ -12,6 +12,7 @@ interface KeyboardActions {
   onUnifiedView: () => void;
   onSplitView: () => void;
   onShowHelp: () => void;
+  onOpenRefMenu: () => void;
   onFocusSearch: () => void;
   onEscape: () => void;
 }
@@ -36,6 +37,7 @@ export function useKeyboard(actions: KeyboardActions) {
   useHotkeys('r', actions.onToggleReviewed, HOTKEY_OPTIONS);
   useHotkeys('u', actions.onUnifiedView, HOTKEY_OPTIONS);
   useHotkeys('s', actions.onSplitView, HOTKEY_OPTIONS);
+  useHotkeys('w', actions.onOpenRefMenu, HOTKEY_OPTIONS);
   useHotkeys('escape', actions.onEscape, { enableOnFormTags: ['INPUT', 'TEXTAREA'] });
 
   useEffect(() => {

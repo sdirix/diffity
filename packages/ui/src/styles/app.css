@@ -28,6 +28,8 @@
   --color-diff-expanded-gutter: #edf7ff;
   --color-diff-comment-bg: #fff8c5;
   --color-diff-comment-gutter: #ecd364;
+  --color-find-match: rgba(250, 204, 21, 0.4);
+  --color-find-current: #f59e0b;
 
   --color-accent: #0969da;
   --color-accent-hover: #0550ae;
@@ -36,6 +38,9 @@
   --color-deleted: #cf222e;
   --color-modified: #9a6700;
   --color-renamed: #0969da;
+  --color-diff-added: #1a7f37;
+  --color-diff-deleted: #cf222e;
+  --color-diff-renamed: #0969da;
 
   --color-hover: rgba(208, 215, 222, 0.32);
   --color-active: rgba(208, 215, 222, 0.48);
@@ -67,6 +72,7 @@
   --color-diff-expanded-gutter: rgba(96, 165, 250, 0.08);
   --color-diff-comment-bg: rgba(234, 179, 8, 0.1);
   --color-diff-comment-gutter: rgba(234, 179, 8, 0.3);
+  --color-find-match: rgba(234, 179, 8, 0.32);
 
   --color-accent: #60a5fa;
   --color-accent-hover: #93c5fd;
@@ -75,12 +81,40 @@
   --color-deleted: #f87171;
   --color-modified: #facc15;
   --color-renamed: #60a5fa;
+  --color-diff-added: #4ade80;
+  --color-diff-deleted: #f87171;
+  --color-diff-renamed: #60a5fa;
 
   --color-hover: rgba(161, 161, 170, 0.1);
   --color-active: rgba(161, 161, 170, 0.18);
 
   --shadow-sticky: 0 1px 2px rgba(0, 0, 0, 0.4);
   --shadow-md: 0 2px 8px rgba(0, 0, 0, 0.5);
+}
+
+/* Colour-blind diff colours: blue for added, orange for deleted. Only diff surfaces read these tokens. */
+[data-diff-palette='colorblind'] {
+  --color-diff-add-bg: #ddf4ff;
+  --color-diff-add-line: #b6e3ff;
+  --color-diff-add-word: #54aeff66;
+  --color-diff-del-bg: #fff1e5;
+  --color-diff-del-line: #ffd8b5;
+  --color-diff-del-word: #fb8f4466;
+  --color-diff-added: #0969da;
+  --color-diff-deleted: #bc4c00;
+  --color-diff-renamed: #8250df;
+}
+
+[data-theme='dark'][data-diff-palette='colorblind'] {
+  --color-diff-add-bg: rgba(56, 139, 253, 0.1);
+  --color-diff-add-line: rgba(56, 139, 253, 0.18);
+  --color-diff-add-word: rgba(56, 139, 253, 0.35);
+  --color-diff-del-bg: rgba(219, 109, 40, 0.1);
+  --color-diff-del-line: rgba(219, 109, 40, 0.18);
+  --color-diff-del-word: rgba(219, 109, 40, 0.35);
+  --color-diff-added: #58a6ff;
+  --color-diff-deleted: #f0883e;
+  --color-diff-renamed: #a371f7;
 }
 
 * {
@@ -133,6 +167,56 @@ dialog {
   animation: slide-down 0.2s ease-out;
 }
 
+/* Loading placeholders: invisible for the first 150ms so fast loads never flash, then a quiet shimmer. */
+.skeleton {
+  background-color: var(--color-bg-tertiary);
+  background-image: linear-gradient(90deg, transparent 0%, var(--skeleton-shine) 50%, transparent 100%);
+  background-size: 200% 100%;
+  background-repeat: no-repeat;
+  animation: skeleton-in 120ms ease-out 150ms both, skeleton-shimmer 1.6s ease-in-out 270ms infinite;
+}
+
+:root {
+  --skeleton-shine: rgba(255, 255, 255, 0.6);
+}
+
+[data-theme='dark'] {
+  --skeleton-shine: rgba(255, 255, 255, 0.05);
+}
+
+@keyframes skeleton-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes skeleton-shimmer {
+  from {
+    background-position: 150% 0;
+  }
+  to {
+    background-position: -50% 0;
+  }
+}
+
+/* Content that replaces a placeholder fades in place, nothing moves. */
+.reveal {
+  animation: skeleton-in 120ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skeleton {
+    background-image: none;
+    animation: skeleton-in 1ms linear 150ms both;
+  }
+  .reveal {
+    animation: none;
+  }
+}
+
 @keyframes flash-highlight {
   0% {
     background-color: var(--color-diff-comment-bg);
@@ -170,6 +254,55 @@ dialog {
 
 .flash-thread .thread-card {
   animation: flash-thread 1.5s ease-out;
+}
+
+/* Toasts: text wraps, buttons sit on their own row below it, main button first. Swipe right to dismiss.
+   The toaster prefix outranks the styles sonner inserts after this sheet. */
+[data-sonner-toaster] [data-sonner-toast][data-styled='true'] {
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+[data-sonner-toaster] [data-sonner-toast][data-styled='true'] [data-icon] {
+  height: 20px;
+  margin: 0;
+}
+
+[data-sonner-toaster] [data-sonner-toast][data-styled='true'] [data-content] {
+  flex: 1 1 calc(100% - 28px);
+}
+
+[data-sonner-toaster] [data-sonner-toast][data-styled='true'] [data-title] {
+  line-height: 20px;
+}
+
+[data-sonner-toaster] [data-sonner-toast][data-styled='true'] [data-description] {
+  line-height: 16px;
+  white-space: pre-line;
+}
+
+[data-sonner-toaster] [data-sonner-toast][data-styled='true'][data-type='error'] [data-description] {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+}
+
+[data-sonner-toaster] [data-sonner-toast][data-styled='true'] [data-button] {
+  margin: 0;
+}
+
+[data-sonner-toaster] [data-sonner-toast][data-styled='true'] [data-action] {
+  order: 1;
+}
+
+[data-sonner-toaster] [data-sonner-toast][data-styled='true'] [data-cancel] {
+  order: 2;
+}
+
+[data-sonner-toaster] [data-sonner-toast][data-styled='true'] [data-icon] ~ [data-action] {
+  margin-left: 24px;
 }
 
 #nprogress .bar {
@@ -375,4 +508,13 @@ dialog {
       var(--color-bg-tertiary) calc(4px * 1.414)
     ),
     var(--color-bg-secondary);
+}
+
+::highlight(diffity-find) {
+  background-color: var(--color-find-match);
+}
+
+::highlight(diffity-find-current) {
+  background-color: var(--color-find-current);
+  color: #111111;
 }
