@@ -3,6 +3,7 @@ import {
   type IncomingMessage,
   type ServerResponse,
 } from 'node:http';
+import { createServer as createNetServer, type AddressInfo, type Server as NetServer } from 'node:net';
 import { readFileSync, existsSync } from 'node:fs';
 import { join, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -56,7 +57,9 @@ import { handleDiffFileRoute, LARGE_FILE_PATCH_LENGTH } from './diff-file-routes
 import { handleViewedRoute } from './viewed-routes.js';
 import { handleSettingsRoute } from './settings-routes.js';
 import { editorCapability, handleEditorRoute } from './editor-routes.js';
+import { handleInstanceRoute } from './instance-routes.js';
 import { sendJson, sendError, readBody } from './http-utils.js';
+import { rejectRequest } from './request-guard.js';
 import {
   registerInstance,
   deregisterInstance
@@ -80,8 +83,51 @@ const MIME_TYPES: Record<string, string> = {
   '.pdf': 'application/pdf',
 };
 
+const TEXT = 'text/plain; charset=utf-8';
+
+/** Types of the repo files `/api/tree/raw/` serves for previews. Markup and scripts read as text. */
+const RAW_TYPES: Record<string, string> = { ...MIME_TYPES, '.html': TEXT, '.js': TEXT, '.css': TEXT, '.json': TEXT };
+
+/**
+ * A repo file runs nothing on the server's origin, which the request guard
+ * trusts. Images, SVG styles and PDFs still show, inline or opened on their own.
+ */
+const RAW_POLICY = "sandbox; default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'";
+
 export function getHost(): string {
   return process.env.DIFFITY_HOST?.trim() || 'localhost';
+}
+
+const LOOPBACK_ADDRESSES = ['127.0.0.1', '::1'];
+const MAX_PORT_RETRIES = 10;
+
+/** The addresses the server listens on, the loopback ones unless `DIFFITY_BIND` names another. */
+export function getBindAddresses(): string[] {
+  const bind = process.env.DIFFITY_BIND?.trim().replace(/^\[(.*)\]$/, '$1');
+  return bind && bind !== 'localhost' ? [bind] : LOOPBACK_ADDRESSES;
+}
+
+/** The `DIFFITY_BIND` address when it lets other machines connect, else `null`. */
+export function getExposedBindAddress(): string | null {
+  const [address] = getBindAddresses();
+  return address === '::1' || address.startsWith('127.') ? null : address;
+}
+
+/** Listens on `host`, resolving with the port or rejecting with the listen error. */
+function listen(server: NetServer, port: number, host: string): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const onError = (err: Error) => {
+      server.off('listening', onListening);
+      reject(err);
+    };
+    const onListening = () => {
+      server.off('error', onError);
+      resolve((server.address() as AddressInfo).port);
+    };
+    server.once('error', onError);
+    server.once('listening', onListening);
+    server.listen(port, host);
+  });
 }
 
 interface ServerOptions {
@@ -165,6 +211,19 @@ interface ServerResult {
   close: () => void;
 }
 
+let loggingRejections = false;
+
+/** Logs a rejection that no handler caught and keeps serving, instead of letting it end the process. */
+function logUnhandledRejections() {
+  if (loggingRejections) {
+    return;
+  }
+  loggingRejections = true;
+  process.on('unhandledRejection', (reason) => {
+    console.error('diffity: unhandled rejection', reason);
+  });
+}
+
 export function startServer(options: ServerOptions): Promise<ServerResult> {
   const {
     port,
@@ -177,6 +236,7 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
   } = options;
 
   const includeUntracked = diffArgs.length === 0;
+  logUnhandledRejections();
 
   function enrichWithLineCounts(diff: ParsedDiff, base: BaseSource): ParsedDiff {
     const files = diff.files.filter((file) => file.status !== 'added' && !file.isBinary);
@@ -204,28 +264,25 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
         const url = new URL(req.url || '/', `http://${getHost()}:${port}`);
         const pathname = url.pathname;
 
-        res.setHeader('Access-Control-Allow-Origin', '*');
-        res.setHeader(
-          'Access-Control-Allow-Methods',
-          'GET, POST, PATCH, DELETE, OPTIONS',
-        );
-        res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-
-        if (req.method === 'OPTIONS') {
-          res.writeHead(204);
-          res.end();
+        const rejection = rejectRequest(req, pathname, getHost());
+        if (rejection) {
+          sendError(res, rejection.status, rejection.message);
           return;
         }
 
         if (pathname === '/api/revert-file' && req.method === 'POST') {
           try {
             const body = JSON.parse(await readBody(req));
-            const { filePath: path } = body;
+            const { filePath: path, oldPath } = body;
             if (!path || typeof path !== 'string') {
               sendError(res, 400, 'Missing filePath');
               return;
             }
-            revertFile(path);
+            if (oldPath != null && typeof oldPath !== 'string') {
+              sendError(res, 400, 'Invalid oldPath');
+              return;
+            }
+            revertFile(path, oldPath || undefined);
             sendJson(res, { ok: true });
           } catch (err) {
             if (err instanceof InputError) {
@@ -496,9 +553,11 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
           const filePath = decodePathParam(pathname, '/api/tree/raw/');
           try {
             const { data } = getWorkingTreeRawFile(filePath);
-            const ext = extname(filePath);
-            const mime = MIME_TYPES[ext] || 'application/octet-stream';
-            res.writeHead(200, { 'Content-Type': mime });
+            res.writeHead(200, {
+              'Content-Type': RAW_TYPES[extname(filePath).toLowerCase()] || 'application/octet-stream',
+              'Content-Security-Policy': RAW_POLICY,
+              'X-Content-Type-Options': 'nosniff',
+            });
             res.end(data);
           } catch (err) {
             sendFileError(res, err, filePath);
@@ -549,6 +608,10 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
           return;
         }
 
+        if (handleInstanceRoute(req, res, pathname)) {
+          return;
+        }
+
         if (await handleViewedRoute(req, res, pathname, url)) {
           return;
         }
@@ -578,40 +641,47 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
     },
   );
 
+  const extraServers: NetServer[] = [];
+
   const closeFn = () => {
     deregisterInstance(process.pid);
     server.close();
+    extraServers.forEach((extra) => extra.close());
   };
 
-  return new Promise((resolve, reject) => {
-    let currentPort = port;
-    let retries = 0;
-    const maxRetries = portIsExplicit ? 0 : 10;
-
-    const onError = (err: NodeJS.ErrnoException) => {
-      if (err.code === 'EADDRINUSE' && retries < maxRetries) {
-        retries++;
-        server.close();
-        currentPort++;
-        setTimeout(() => server.listen(currentPort), 200);
-      } else if (err.code === 'EADDRINUSE' && portIsExplicit) {
-        reject(new Error(`Port ${port} is already in use`));
-      } else {
-        reject(err);
+  /**
+   * Listens on the first address and on the others with the same port, which
+   * fails like a taken port when one of them has it. An address the machine
+   * lacks, like `::1` without IPv6, is skipped.
+   */
+  async function listenAll(candidate: number): Promise<number> {
+    const [host, ...otherHosts] = getBindAddresses();
+    const actualPort = await listen(server, candidate, host);
+    for (const otherHost of otherHosts) {
+      const extra = createNetServer((socket) => server.emit('connection', socket));
+      try {
+        await listen(extra, actualPort, otherHost);
+        extraServers.push(extra);
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === 'EADDRINUSE') {
+          throw err;
+        }
       }
-    };
+    }
+    return actualPort;
+  }
 
-    server.on('error', onError);
-    server.on('listening', () => {
-      const addr = server.address();
-      if (addr && typeof addr !== 'string') {
+  return (async () => {
+    for (let retries = 0; ; retries++) {
+      try {
+        const actualPort = await listenAll(port === 0 ? 0 : port + retries);
         if (effectiveRef) {
           setCurrentSession(findOrCreateSession(effectiveRef));
         }
         if (registryInfo) {
           registerInstance({
             pid: process.pid,
-            port: addr.port,
+            port: actualPort,
             repoRoot: registryInfo.repoRoot,
             repoHash: registryInfo.repoHash,
             repoName: registryInfo.repoName,
@@ -621,10 +691,21 @@ export function startServer(options: ServerOptions): Promise<ServerResult> {
             version,
           });
         }
-        resolve({ port: addr.port, close: closeFn });
+        return { port: actualPort, close: closeFn };
+      } catch (err) {
+        server.close();
+        extraServers.splice(0).forEach((extra) => extra.close());
+        if ((err as NodeJS.ErrnoException).code !== 'EADDRINUSE') {
+          throw err;
+        }
+        if (portIsExplicit) {
+          throw new Error(`Port ${port} is already in use`);
+        }
+        if (retries >= MAX_PORT_RETRIES) {
+          throw err;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 200));
       }
-    });
-
-    server.listen(currentPort);
-  });
+    }
+  })();
 }

@@ -213,6 +213,19 @@ export function fetchStatus(): Promise<RepoStatus> {
   return apiFetch('/api/status');
 }
 
+/** Another running diffity server, as the registry knows it. */
+export interface DiffityInstance {
+  port: number;
+  name: string;
+  root: string;
+  branch: string | null;
+}
+
+export async function fetchInstances(): Promise<DiffityInstance[]> {
+  const json = await apiFetch<{ instances: DiffityInstance[] }>('/api/instances');
+  return json.instances;
+}
+
 /** Resolves `ref` like the diff does, failing with the server's message when it does not. */
 export function fetchRef(ref: string): Promise<RefLookup> {
   return apiFetch(buildUrl('/api/ref', { ref }));
@@ -303,7 +316,7 @@ export function deleteAllThreads(sessionId: string): Promise<void> {
 }
 
 export function deleteThread(threadId: string): Promise<void> {
-  return apiVoid(`/api/threads/${threadId}`, { method: 'DELETE' });
+  return apiVoid(`/api/threads/${threadId}`, { method: 'DELETE', headers: JSON_HEADERS });
 }
 
 export function editComment(commentId: string, body: string): Promise<void> {
@@ -315,7 +328,7 @@ export function editComment(commentId: string, body: string): Promise<void> {
 }
 
 export function deleteComment(commentId: string): Promise<void> {
-  return apiVoid(`/api/comments/${commentId}`, { method: 'DELETE' });
+  return apiVoid(`/api/comments/${commentId}`, { method: 'DELETE', headers: JSON_HEADERS });
 }
 
 export function revertFile(filePath: string, isUntracked: boolean): Promise<void> {

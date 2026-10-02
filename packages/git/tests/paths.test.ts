@@ -90,6 +90,28 @@ describe('revertFile', () => {
     expect(repo.git('status', '--porcelain')).toBe('');
   });
 
+  it('removes only files git lists as untracked', () => {
+    repo.write('.gitignore', '.env\n');
+    repo.write('.env', 'SECRET=1\n');
+    expect(code(() => revertFile('.env'))).toBe('invalid');
+    expect(code(() => revertFile('.git/config'))).toBe('invalid');
+    expect(code(() => revertFile('src/.GIT/config'))).toBe('invalid');
+    expect(existsSync(join(repo.dir, '.env'))).toBe(true);
+    expect(existsSync(join(repo.dir, '.git', 'config'))).toBe(true);
+    revertFile('.gitignore');
+    expect(existsSync(join(repo.dir, '.gitignore'))).toBe(false);
+    rmSync(join(repo.dir, '.env'));
+  });
+
+  it('reverts both sides of a staged rename', () => {
+    repo.git('mv', 'README.md', 'moved.md');
+    repo.write('moved.md', 'hello\nmore\n');
+    revertFile('moved.md', 'README.md');
+    expect(repo.read('README.md')).toBe('hello\n');
+    expect(existsSync(join(repo.dir, 'moved.md'))).toBe(false);
+    expect(repo.git('status', '--porcelain')).toBe('');
+  });
+
   it('treats paths literally instead of as globs', () => {
     repo.write('README.md', 'changed\n');
     repo.write('src/app.ts', 'changed\n');

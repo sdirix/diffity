@@ -12,6 +12,9 @@ export default defineConfig({
       "/api": {
         target: "http://localhost:5391",
         changeOrigin: true,
+        configure: (proxy) => {
+          proxy.on("proxyReq", (proxyReq) => proxyReq.removeHeader("origin"));
+        },
       },
     },
   },

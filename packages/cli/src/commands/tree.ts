@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import open from 'open';
 import pc from 'picocolors';
 import { isGitRepo, getRepoRoot, getRepoName } from '@diffity/git';
-import { startServer, getHost } from '../server.js';
+import { startServer, getHost, getExposedBindAddress } from '../server.js';
 import { findInstanceForRepo, findAvailablePort, deregisterInstance, killInstance, checkInstanceHealth } from '../registry.js';
 
 export function registerTreeCommand(program: Command, version: string) {
@@ -87,6 +87,10 @@ export function registerTreeCommand(program: Command, version: string) {
           console.log(`  ${pc.dim('Repository file browser')}`);
           console.log('');
           console.log(`  ${pc.green('→')} ${pc.cyan(url)}`);
+          const exposed = getExposedBindAddress();
+          if (exposed) {
+            console.log(`  ${pc.yellow(`Listening on ${exposed}`)}`);
+          }
           console.log(`  ${pc.dim('Press Ctrl+C to stop')}`);
           console.log('');
         }

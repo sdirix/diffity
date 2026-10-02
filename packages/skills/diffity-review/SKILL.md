@@ -51,7 +51,7 @@ You are reviewing a diff and leaving inline comments using the `{{binary}} agent
    - GitHub PR URL: `origin/<base branch>`, with the base branch from `gh pr view <pr-url> --json baseRefName --jq .baseRefName`
 2. Run `{{binary}} list --json` to get all running instances. Parse the JSON output and find the entry whose `repoRoot` matches the current repo. One instance serves every ref of its repo, so its `ref` field does not need to match.
 3. If **no instance is running** for this repo, start one in the background (for a PR URL see the next point instead):
-   - Command: `{{binary}} --no-open <ref>` (or `{{binary}} --no-open` if no ref). Flags go before the ref because the CLI reads anything after it as another ref.
+   - Command: `{{binary}} --no-open <ref>` (or `{{binary}} --no-open` if no ref).
    - Use Bash tool with `run_in_background: true`
    - Wait 2 seconds, then verify with `{{binary}} list --json` and note the port.
 4. For a **GitHub PR URL**, run `{{binary}} --no-open <pr-url>` in the background whether or not an instance is running. It checks out the PR branch, fetches the base branch, and starts or reuses the instance. Wait 2 seconds, then verify with `{{binary}} list --json`.

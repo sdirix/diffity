@@ -2,7 +2,7 @@ import { basename } from 'node:path';
 import { InputError } from './errors.js';
 import { getRepoRoot, git, gitTry } from './exec.js';
 import { verifyCommit } from './refs.js';
-import { WORKING_TREE_REFS } from './diff.js';
+import { normalizeRef, WORKING_TREE_REFS } from './diff.js';
 import type { RepoInfo } from './types.js';
 
 export function isGitRepo(): boolean {
@@ -55,16 +55,17 @@ export function getRepoInfo(): RepoInfo {
   };
 }
 
+/** Whether `ref` is a commit or a range the server can diff, including the parent range of a root commit. */
 export function isValidGitRef(ref: string): boolean {
-  for (const sep of ['...', '..']) {
-    const idx = ref.indexOf(sep);
-    if (idx !== -1) {
-      const left = ref.slice(0, idx) || 'HEAD';
-      const right = ref.slice(idx + sep.length) || 'HEAD';
-      return verifyCommit(left) !== null && verifyCommit(right) !== null;
+  try {
+    normalizeRef(ref);
+    return true;
+  } catch (err) {
+    if (err instanceof InputError) {
+      return false;
     }
+    throw err;
   }
-  return verifyCommit(ref) !== null;
 }
 
 export function getRemoteUrl(name = 'origin'): string | null {

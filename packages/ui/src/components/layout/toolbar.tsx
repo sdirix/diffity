@@ -18,6 +18,7 @@ import { CommentToolbarActions } from '../comments/comment-toolbar-actions';
 import { OptionsMenu, menuItemClass } from './options-menu';
 import { RefMenu, UncommittedToggle } from './ref-menu';
 import { ViewTabs } from './view-tabs';
+import { InstanceSwitcher } from './instance-switcher';
 import { GENERAL_THREAD_FILE_PATH } from '../comments/types';
 import type { ViewMode } from '../../lib/diff-utils';
 import type { CommentThread } from '../comments/types';
@@ -175,6 +176,7 @@ export function Toolbar(props: ToolbarProps) {
     <div className="flex items-center gap-3 px-4 py-1.5 bg-bg-secondary border-b border-border font-sans text-xs">
       <div className="flex items-center gap-2.5 min-w-0 shrink">
         {repoName && <span className="font-semibold text-text text-sm truncate">{repoName}</span>}
+        <InstanceSwitcher />
         <ViewTabs current="diff" />
         {branch && (
           <span className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-diff-hunk-bg text-diff-hunk-text rounded font-mono text-[11px] shrink-0">

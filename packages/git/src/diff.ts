@@ -208,12 +208,18 @@ export function getDiffFiles(ref: string, options: DiffOptions = {}): string[] {
   return [...files].filter((file) => !rules.isIgnored(file));
 }
 
-/**
- * Discards working tree changes to `filePath`. Restores it from HEAD, or
- * removes it from the index and the working tree when HEAD does not have it.
- */
-export function revertFile(filePath: string): void {
-  assertRepoPath(filePath);
+function isUntracked(path: string): boolean {
+  return gitNul(['ls-files', '-z', '--others', '--exclude-standard', '--', `:(top,literal)${path}`]).includes(path);
+}
+
+function assertRevertable(path: string): void {
+  assertRepoPath(path);
+  if (path.split('/').some((segment) => segment.toLowerCase() === '.git')) {
+    throw new InputError(`Invalid path: ${path}`);
+  }
+}
+
+function revertPath(filePath: string): void {
   const type = gitTry(['cat-file', '-t', `HEAD:${filePath}`])?.trim();
   if (type === 'tree') {
     throw new InputError(`Not a file: ${filePath}`);
@@ -223,7 +229,7 @@ export function revertFile(filePath: string): void {
     return;
   }
   if (gitTry(['--literal-pathspecs', 'ls-files', '-z', '--error-unmatch', '--', filePath]) !== null) {
-    git(['--literal-pathspecs', 'rm', '--cached', '--quiet', '--', filePath]);
+    git(['--literal-pathspecs', 'rm', '--cached', '--force', '--quiet', '--', filePath]);
   }
   const entry = repoEntryPath(filePath);
   let stat;
@@ -232,9 +238,24 @@ export function revertFile(filePath: string): void {
   } catch {
     return;
   }
+  if (!isUntracked(filePath)) {
+    throw new InputError(`Not an untracked file: ${filePath}`);
+  }
   if (stat.isFile() || stat.isSymbolicLink()) {
     unlinkSync(entry);
   }
+}
+
+/**
+ * Discards the changes to `filePath`. Restores it from HEAD, or else
+ * unstages it and removes it from the working tree, but only a file git
+ * lists as untracked, so ignored files stay. `oldPath` is the source of a
+ * staged rename, restored as well.
+ */
+export function revertFile(filePath: string, oldPath?: string): void {
+  const paths = oldPath && oldPath !== filePath ? [filePath, oldPath] : [filePath];
+  paths.forEach(assertRevertable);
+  paths.forEach(revertPath);
 }
 
 export function revertHunk(patch: string): void {

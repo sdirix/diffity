@@ -11,12 +11,18 @@ export function sendError(res: ServerResponse, status: number, message: string) 
   res.end(JSON.stringify({ error: message }));
 }
 
+/** The body as text. Rejects when the client goes away before sending all of it. */
 export function readBody(req: IncomingMessage): Promise<string> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     req.on('data', (chunk: Buffer) => chunks.push(chunk));
     req.on('end', () => resolve(Buffer.concat(chunks).toString()));
     req.on('error', reject);
+    req.on('close', () => {
+      if (!req.complete) {
+        reject(new Error('Request aborted'));
+      }
+    });
   });
 }
 
@@ -40,12 +46,15 @@ export function withJsonBody(
   errorPrefix: string,
   handler: (body: Record<string, unknown>) => void,
 ) {
-  readBody(req).then((raw) => {
-    try {
-      const body = JSON.parse(raw);
-      handler(body);
-    } catch (err) {
-      sendError(res, 500, `${errorPrefix}: ${err}`);
-    }
-  });
+  readBody(req).then(
+    (raw) => {
+      try {
+        const body = JSON.parse(raw);
+        handler(body);
+      } catch (err) {
+        sendError(res, 500, `${errorPrefix}: ${err}`);
+      }
+    },
+    () => sendError(res, 400, 'Incomplete request body'),
+  );
 }

@@ -43,6 +43,7 @@ import { TourPanel } from './tour-panel';
 import { openInEditorWithToast } from '../../lib/toast';
 import { PencilIcon } from '../icons/pencil-icon';
 import { ViewTabs } from '../layout/view-tabs';
+import { InstanceSwitcher } from '../layout/instance-switcher';
 import { useRestoredScroll } from '../../lib/view-state';
 import { isModalOpen } from '../../lib/dom-utils';
 import { FileViewerSkeleton, FolderSkeleton } from '../layout/skeleton';
@@ -535,6 +536,7 @@ export function TreePage(props: TreePageProps) {
               {info.name}
             </button>
           )}
+          <InstanceSwitcher />
           <ViewTabs current='tree' />
           {info?.branch && (
             <span className='inline-flex items-center gap-1 px-1.5 py-0.5 bg-diff-hunk-bg text-diff-hunk-text rounded font-mono text-[11px] shrink-0'>

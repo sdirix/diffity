@@ -13,7 +13,7 @@ import {
   isAuthenticated,
   detectRemote,
 } from '@diffity/github';
-import { startServer, getHost } from './server.js';
+import { startServer, getHost, getExposedBindAddress } from './server.js';
 import { registerAgentCommands } from './agent.js';
 import { findInstanceForRepo, findAvailablePort, deregisterInstance, killInstance, checkInstanceHealth } from './registry.js';
 import { registerOpenCommand } from './commands/open.js';
@@ -25,6 +25,8 @@ import { registerTreeCommand } from './commands/tree.js';
 import { registerKillCommand } from './commands/kill.js';
 import { registerConfigCommand } from './commands/config.js';
 import { SKILLS_HASH } from './generated/skills-hash.js';
+import { openTarget } from './target.js';
+import { TREE_REF } from './session.js';
 
 const require = createRequire(import.meta.url);
 const pkg = require('../package.json');
@@ -36,9 +38,8 @@ program
   .description('GitHub-style git diff viewer in the browser')
   .version(pkg.version)
   .enablePositionalOptions()
-  .passThroughOptions()
   .option('--skills-hash', 'Print skills hash and exit', false)
-  .argument('[refs...]', 'Git refs to diff')
+  .argument('[refs...]', 'Git refs to diff, or a folder or file to open')
   .option('--base <ref>', 'Base ref to compare from (e.g. main, HEAD~3, v1.0.0)')
   .option('--compare <ref>', 'Ref to compare against base (default: working tree)')
   .option('--port <port>', 'Port to use (default: auto-assigned from 5391)', '5391')
@@ -58,8 +59,14 @@ Common usage:
   $ diffity staged                       Only staged changes
   $ diffity unstaged                     Only unstaged changes
   $ diffity https://github.com/owner/repo/pull/123   Review a GitHub PR
+  $ diffity ../api                       Uncommitted changes in ../api
+  $ diffity src/app.ts                   Open a file in the tree browser
+  $ diffity main -- ../api               What changed since main in ../api
   $ diffity --dark --unified             Dark mode, unified view
   $ diffity --new                        Force restart existing instance
+
+A folder opens its repo, a file opens in the tree browser. A name
+that is both a ref and a path is a ref, put -- before the path.
 
 Other commands:
   $ diffity tree                         Browse repository files
@@ -69,12 +76,37 @@ Other commands:
   $ diffity config editor "<command>"    Set the custom editor command
   $ diffity prune                        Remove all diffity data
 
-The --base/--compare flags are optional — positional args and
-range syntax (main..feature, main...feature) also work.`)
+The --base/--compare flags are optional. Positional args and
+range syntax (main..feature, main...feature) also work.
+
+Environment:
+  DIFFITY_BIND   Address to listen on (default: 127.0.0.1 and ::1).
+                 0.0.0.0 lets other machines connect, like through a
+                 published container port.
+  DIFFITY_HOST   Hostname of the printed URL, accepted besides the
+                 loopback names (default: localhost).`)
   .action(async (refs: string[], opts) => {
     if (opts.skillsHash) {
       console.log(SKILLS_HASH);
       return;
+    }
+
+    let file: string | null = null;
+    try {
+      const target = openTarget(refs, !refs.includes('--') && process.argv.slice(2).includes('--'));
+      refs = target.refs;
+      file = target.file;
+      if (target.ambiguous && !opts.quiet) {
+        console.log(pc.dim(`  '${refs[0]}' is also a path, open it with diffity -- ${refs[0]}`));
+      }
+    } catch (err) {
+      console.error(pc.red(`Error: ${err instanceof Error ? err.message : err}`));
+      process.exit(1);
+    }
+
+    if (file && (refs.length > 0 || opts.base || opts.compare)) {
+      console.error(pc.red('Error: Refs do not apply to a file path.'));
+      process.exit(1);
     }
 
     if (!isGitRepo()) {
@@ -82,24 +114,10 @@ range syntax (main..feature, main...feature) also work.`)
       process.exit(1);
     }
 
-    // When the first positional is a PR URL, `passThroughOptions()` above slurps any
-    // trailing flags (e.g. `diffity <url> --no-open`) into `refs` as positional args.
-    // Without this reparse, `refs.length === 1` would be false and the PR URL path
-    // would be skipped, producing a confusing "not a valid git reference" error.
-    if (refs.length > 1 && isGitHubPrUrl(refs[0])) {
-      const extras = refs.splice(1);
-      for (const arg of extras) {
-        switch (arg) {
-          case '--no-open': opts.open = false; break;
-          case '--quiet': opts.quiet = true; break;
-          case '--dark': opts.dark = true; break;
-          case '--unified': opts.unified = true; break;
-          case '--new': opts.new = true; break;
-          default:
-            console.error(pc.red(`Error: Unexpected argument after PR URL: ${arg}`));
-            process.exit(1);
-        }
-      }
+    const optionLike = refs.find((ref) => ref.startsWith('-'));
+    if (optionLike !== undefined) {
+      console.error(pc.red(`Error: '${optionLike}' is not a git reference. Refs cannot start with '-'.`));
+      process.exit(1);
     }
 
     if (refs.length === 1 && isGitHubPrUrl(refs[0])) {
@@ -194,7 +212,9 @@ range syntax (main..feature, main...feature) also work.`)
       }
     }
 
-    for (const ref of refs) {
+    // Two refs are diffed as one range, so they are checked as that range.
+    const checkedRefs = refs.length === 2 ? [`${refs[0]}..${refs[1]}`] : refs;
+    for (const ref of checkedRefs) {
       if (WORKING_TREE_REFS.has(ref)) {
         continue;
       }
@@ -234,7 +254,10 @@ range syntax (main..feature, main...feature) also work.`)
     }
 
     let effectiveRef: string;
-    if (refs.length > 0) {
+    if (file) {
+      effectiveRef = TREE_REF;
+      description = 'Repository file browser';
+    } else if (refs.length > 0) {
       effectiveRef = refs.length === 2 ? `${refs[0]}..${refs[1]}` : refs[0];
     } else {
       effectiveRef = 'work';
@@ -243,6 +266,15 @@ range syntax (main..feature, main...feature) also work.`)
     const repoRoot = getRepoRoot();
     const repoHash = createHash('sha256').update(repoRoot).digest('hex').slice(0, 12);
     const repoName = getRepoName();
+
+    const urlParams = new URLSearchParams(file ? { path: file, type: 'file' } : { ref: effectiveRef });
+    if (opts.dark) {
+      urlParams.set('theme', 'dark');
+    }
+    if (opts.unified && !file) {
+      urlParams.set('view', 'unified');
+    }
+    const urlFor = (port: number) => `http://${getHost()}:${port}/${file ? 'tree' : 'diff'}?${urlParams.toString()}`;
 
     const existing = findInstanceForRepo(repoHash);
     if (existing) {
@@ -256,14 +288,7 @@ range syntax (main..feature, main...feature) also work.`)
           console.log(pc.dim(`  Stopped existing instance (pid ${existing.pid})`));
         }
       } else {
-        const urlParams = new URLSearchParams({ ref: effectiveRef });
-        if (opts.dark) {
-          urlParams.set('theme', 'dark');
-        }
-        if (opts.unified) {
-          urlParams.set('view', 'unified');
-        }
-        const url = `http://${getHost()}:${existing.port}/diff?${urlParams.toString()}`;
+        const url = urlFor(existing.port);
 
         if (!opts.quiet) {
           console.log('');
@@ -294,14 +319,7 @@ range syntax (main..feature, main...feature) also work.`)
         version: pkg.version,
         registryInfo: { repoRoot, repoHash, repoName },
       });
-      const urlParams = new URLSearchParams({ ref: effectiveRef });
-      if (opts.dark) {
-        urlParams.set('theme', 'dark');
-      }
-      if (opts.unified) {
-        urlParams.set('view', 'unified');
-      }
-      const url = `http://${getHost()}:${actualPort}/diff?${urlParams.toString()}`;
+      const url = urlFor(actualPort);
 
       if (!opts.quiet) {
         console.log('');
@@ -309,6 +327,10 @@ range syntax (main..feature, main...feature) also work.`)
         console.log(`  ${pc.dim(description)}`);
         console.log('');
         console.log(`  ${pc.green('→')} ${pc.cyan(url)}`);
+        const exposed = getExposedBindAddress();
+        if (exposed) {
+          console.log(`  ${pc.yellow(`Listening on ${exposed}`)}`);
+        }
         console.log(`  ${pc.dim('Press Ctrl+C to stop')}`);
         console.log('');
       }

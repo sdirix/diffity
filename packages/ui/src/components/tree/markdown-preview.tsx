@@ -1,11 +1,11 @@
 import { Fragment, useMemo, useCallback, type ReactElement } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import rehypeRaw from 'rehype-raw';
 import type { Components } from 'react-markdown';
 import { useHighlighter } from '../../hooks/use-highlighter';
 import { useDocumentTheme } from '../../hooks/use-theme';
 import { MermaidDiagram } from '../mermaid-diagram';
+import { RAW_HTML_REHYPE_PLUGINS, RAW_HTML_REMARK_REHYPE_OPTIONS } from '../../lib/markdown-sanitize';
 
 interface MarkdownPreviewProps {
   content: string[];
@@ -164,7 +164,7 @@ export function MarkdownPreview(props: MarkdownPreviewProps) {
         <FrontmatterTable entries={frontmatterEntries} />
       )}
       <div className="gh-md-body">
-        <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]} components={components}>
+        <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={RAW_HTML_REHYPE_PLUGINS} remarkRehypeOptions={RAW_HTML_REMARK_REHYPE_OPTIONS} components={components}>
           {markdown}
         </ReactMarkdown>
       </div>

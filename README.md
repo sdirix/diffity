@@ -52,9 +52,16 @@ diffity abc1234..def5678                   # changes between two commits
 diffity work                               # all changes (staged + unstaged + untracked)
 diffity staged                             # only staged changes (git add'd)
 diffity unstaged                           # only unstaged modifications
+
+# other repos and files
+diffity ~/projects/api                     # uncommitted changes in another repo
+diffity src/app.ts                         # open a file in the tree browser
+diffity main -- ~/projects/api             # what changed since main in another repo
 ```
 
 The `--base`/`--compare` flags use the same terminology as GitHub PRs — base is what you're comparing against, compare is the branch with changes. You can also use range syntax (`main..feature`) or just pass two positional args (`diffity main feature`).
+
+A folder opens its repo as if diffity was started there, and a file opens in the tree browser. A name that is both a ref and a path counts as a ref. Put `--` before the path to open it instead.
 
 To keep generated files out of every diff, add a `.diffityignore` with gitignore patterns at the repo root. Patterns that should stay out of the repo go under Hidden files in the options menu. A negated file shows even inside a hidden folder:
 
@@ -239,6 +246,8 @@ cd ~/projects/app && diffity
 cd ~/projects/api && diffity
 ```
 
+With more than one instance running, the arrow next to the repo name lists the others with their branch and opens one in the same tab.
+
 If you run `diffity` in a repo that already has a running instance, it opens the existing one instead of starting a new server. Use `--new` to kill the existing instance and start fresh.
 
 ```bash
@@ -277,12 +286,21 @@ Press `?` for all keyboard shortcuts. On macOS, ⌘ replaces Ctrl.
 
 | Variable       | Description                                                               |
 | -------------- | ------------------------------------------------------------------------- |
-| `DIFFITY_HOST` | Hostname used in the printed URL (default: `localhost`).                  |
+| `DIFFITY_BIND` | Address the server listens on (default: `127.0.0.1` and `::1`). `0.0.0.0` lets other machines connect. |
+| `DIFFITY_HOST` | Hostname used in the printed URL and accepted besides `localhost`, `127.0.0.1` and `[::1]` (default: `localhost`). |
 
-Useful when running diffity inside a VM or container and opening it from another machine:
+`DIFFITY_BIND` decides who can connect, `DIFFITY_HOST` which name the browser may use.
+
+In a container with the browser inside it, the defaults work. A port published with `docker run -p` arrives from outside the container's loopback, so it needs `DIFFITY_BIND=0.0.0.0`. Opened as `localhost` on the host, nothing else is needed:
 
 ```bash
-DIFFITY_HOST=diffity.local diffity
+DIFFITY_BIND=0.0.0.0 diffity
+```
+
+Opened from another machine under another name, set both:
+
+```bash
+DIFFITY_BIND=0.0.0.0 DIFFITY_HOST=diffity.local diffity
 ```
 
 ## License
